@@ -1,7 +1,11 @@
 name: test
 on:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,7 +18,12 @@ jobs:
           go-version: "1.23"
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./... -race -coverprofile=cover.out
+      # -race braucht cgo (Race-Detector-Runtime); der Lib-Build selbst bleibt pure-Go
+      # (go build/vet oben laufen mit CGO_ENABLED=0). Nur diese Stufe aktiviert cgo.
+      - name: Test (race + coverage)
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./... -race -coverprofile=cover.out
       - name: Coverage-Gate (test-coverage-pflicht.md)
         run: |
           chmod +x scripts/coverage-gate-strict.sh
