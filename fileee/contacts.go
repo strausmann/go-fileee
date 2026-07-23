@@ -19,20 +19,29 @@ func newContactService(c *Client) WriteService[Contact] {
 	return &contactService{restService: restService[Contact]{client: c, resourcePath: "contacts"}}
 }
 
-// contactCreateWire spiegelt ContactCreateRequest (openapi.json) — firstName/lastName sind laut
-// §10.3 E nicht im beobachteten POST-Body bestätigt, werden hier aber mitgesendet (best-effort,
-// Server ignoriert unbekannte Felder erfahrungsgemäß, statt sie abzulehnen).
+// contactCreateWire spiegelt ContactCreateRequest (openapi.json + API.md §4.6 "Body-Felder").
+// firstName/lastName sind laut §10.3 E nicht im beobachteten POST-Body bestätigt, werden hier
+// aber mitgesendet (best-effort). LIVE VERIFIZIERT (2026-07-23, Testkonto): der Server lehnt
+// einen Create-Request ohne contactStatus/connectedToOtherUser/fromUserDb/documentCounter/
+// deleted/version MIT 400 ab (leerer Fehler-Body) — diese Felder sind entgegen der ursprünglichen
+// Annahme (nur die hier zuvor vorhandene Teilmenge) serverseitig PFLICHT, nicht optional.
 type contactCreateWire struct {
-	ID          string      `json:"id"`
-	CompanyID   string      `json:"companyId,omitempty"`
-	CompanyName string      `json:"companyName,omitempty"`
-	FirstName   string      `json:"firstName,omitempty"`
-	LastName    string      `json:"lastName,omitempty"`
-	Email       string      `json:"email,omitempty"`
-	PhoneNumber string      `json:"phoneNumber,omitempty"`
-	URL         string      `json:"url,omitempty"`
-	Address     Address     `json:"address"`
-	ContactType ContactType `json:"contactType,omitempty"`
+	ID                   string        `json:"id"`
+	CompanyID            string        `json:"companyId,omitempty"`
+	CompanyName          string        `json:"companyName,omitempty"`
+	FirstName            string        `json:"firstName,omitempty"`
+	LastName             string        `json:"lastName,omitempty"`
+	Email                string        `json:"email,omitempty"`
+	PhoneNumber          string        `json:"phoneNumber,omitempty"`
+	URL                  string        `json:"url,omitempty"`
+	Address              Address       `json:"address"`
+	ContactType          ContactType   `json:"contactType,omitempty"`
+	ContactStatus        ContactStatus `json:"contactStatus"`
+	ConnectedToOtherUser bool          `json:"connectedToOtherUser"`
+	FromUserDB           bool          `json:"fromUserDb"`
+	DocumentCounter      int           `json:"documentCounter"`
+	Deleted              bool          `json:"deleted"`
+	Version              int64         `json:"version"`
 }
 
 func (s *contactService) Create(ctx context.Context, entity *Contact) (*Contact, error) {
@@ -43,11 +52,20 @@ func (s *contactService) Create(ctx context.Context, entity *Contact) (*Contact,
 	if id == "" {
 		id = newObjectID()
 	}
+	// contactStatus ist serverseitig Pflicht (siehe Kommentar contactCreateWire) — CUSTOM ist der
+	// Default für einen manuell angelegten, nicht mit einem anderen Nutzer verknüpften Kontakt
+	// (API.md §6.5), falls der Aufrufer keinen Status vorgibt.
+	status := entity.ContactStatus
+	if status == "" {
+		status = ContactStatusCustom
+	}
 	wire := contactCreateWire{
 		ID: id, CompanyID: entity.CompanyID, CompanyName: entity.CompanyName,
 		FirstName: entity.FirstName, LastName: entity.LastName, Email: entity.Email,
 		PhoneNumber: entity.PhoneNumber, URL: entity.URL, Address: entity.Address,
-		ContactType: entity.ContactType,
+		ContactType: entity.ContactType, ContactStatus: status,
+		ConnectedToOtherUser: entity.ConnectedToOtherUser, FromUserDB: entity.FromUserDB,
+		DocumentCounter: entity.DocumentCounter, Deleted: entity.Deleted, Version: entity.Version,
 	}
 	body, err := json.Marshal(wire)
 	if err != nil {

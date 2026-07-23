@@ -69,7 +69,12 @@ func (s *restService[T]) Diff(ctx context.Context, cursor Cursor) (*DiffResult[T
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(diffRequestWire{LocalResults: buildLocalResults(cursor), Limit: defaultPageLimit})
+	body, err := json.Marshal(diffRequestWire{
+		Criteria:     []criterionWire{},
+		SortOrder:    []sortOrderWire{},
+		LocalResults: buildLocalResults(cursor),
+		Limit:        defaultPageLimit,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fileee: diff request encode: %w", err)
 	}
@@ -133,14 +138,21 @@ func (s *restService[T]) queryAllPages(ctx context.Context) ([]T, error) {
 	return all, nil
 }
 
-// newObjectID erzeugt eine clientseitige RFC-4122-v4-UUID (für Contact.Create-`id` und
-// Document.Upload-`id`, API.md §4.1) — bewusst ohne externe UUID-Dependency (Global Constraints:
-// keine zusätzlichen Runtime-Deps). Vollständig hier implementiert (nicht erst in Task 16), da
-// Task 14 vor Task 16 läuft; Task 16 (Dokument-Upload) nutzt dieselbe Funktion.
+// newObjectID erzeugt eine clientseitige ID für Contact.Create-`id` und Document.Upload-`id`
+// (API.md §4.1) — bewusst ohne externe UUID-Dependency (Global Constraints: keine zusätzlichen
+// Runtime-Deps). Vollständig hier implementiert (nicht erst in Task 16), da Task 14 vor Task 16
+// läuft; Task 16 (Dokument-Upload) nutzt dieselbe Funktion.
+//
+// Format: 24 Hex-Zeichen (12 zufällige Bytes), NICHT eine RFC-4122-UUID (36 Zeichen mit
+// Bindestrichen). LIVE VERIFIZIERT (2026-07-23, Contacts.Create gegen Testkonto): eine gesendete
+// UUID wird vom Server MIT 400 "IllegalConditions" / "Invalid Id format" abgelehnt; eine echte,
+// vom Server vergebene Contact-ID hat live beobachtet len=24 (z.B. "6a62852e079173000191609d") —
+// das entspricht dem MongoDB-ObjectId-Format. Ein 24-Hex-Zeichen-Wert wurde live erfolgreich
+// akzeptiert (200, Contact angelegt). Die ursprüngliche Annahme "clientseitig generierte UUID"
+// (API.md §4.1, aus der Kotlin/JS-Code-Analyse von `InstanceHelper.newObjectId()` abgeleitet) war
+// zu diesem Punkt falsch/ungenau — der tatsächlich erwartete ID-Raum ist ObjectId-förmig.
 func newObjectID() string {
-	var b [16]byte
+	var b [12]byte
 	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return fmt.Sprintf("%x", b)
 }

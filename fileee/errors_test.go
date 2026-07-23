@@ -39,6 +39,18 @@ func TestParseAPIError(t *testing.T) {
 			wantLocal: "",
 		},
 		{
+			// LIVE VERIFIZIERT 2026-07-23 gegen Testkonto (Contacts.Create, "Invalid Id format"):
+			// errorCode kommt hier als JSON-ZAHL statt als String — ohne die RawMessage-basierte
+			// Dekodierung (decodeErrorCode) würde json.Unmarshal an dieser Stelle abbrechen und der
+			// GESAMTE Body (inkl. errorMessage) verworfen (siehe apiErrorBody-Kommentar).
+			name:      "400 mit numerischem errorCode (LIVE verifiziert, Contacts.Create)",
+			status:    400,
+			body:      []byte(`{"errorCode":10,"apiError":"IllegalConditions","errorMessage":"Your API Call did not match required conditions. Invalid Id format"}`),
+			wantCode:  "10",
+			wantMsg:   "Your API Call did not match required conditions. Invalid Id format",
+			wantLocal: "",
+		},
+		{
 			name:      "kaputtes JSON -> nur Status übernehmen, kein Panic",
 			status:    500,
 			body:      []byte(`nicht-json`),

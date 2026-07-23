@@ -43,11 +43,37 @@ func (e *APIError) Error() string {
 // apiErrorBody deckt beide belegten Fehler-Body-Varianten strukturell ab (Felder sind ein
 // Superset — nicht jede Variante befüllt jedes Feld). Zeiger statt Werttypen, damit "Feld fehlt"
 // (nil) von "Feld ist Leerstring" unterscheidbar bleibt.
+//
+// ErrorCode ist bewusst json.RawMessage statt *string: LIVE VERIFIZIERT (2026-07-23, Contacts.Create
+// gegen Testkonto, Antwort {"errorCode":10,"apiError":"IllegalConditions","errorMessage":"..."}) —
+// errorCode kommt hier als JSON-ZAHL, nicht als String. Ein *string-Feldtyp ließ json.Unmarshal an
+// dieser Stelle mit einem Typfehler abbrechen, wodurch parseAPIError den KOMPLETTEN Error-Body
+// (inkl. der eigentlich vorhandenen errorMessage) still verwarf — der Aufrufer sah nur eine leere
+// APIError-Hülle statt der echten Serverfehlermeldung. Gleiches Muster wie Page.ImageVersion
+// (flexInt64, types.go): das reverse-engineerte API liefert denselben Feldnamen je nach Endpunkt/
+// Fehlerfall mal als String, mal als Zahl.
 type apiErrorBody struct {
-	APIError         *string `json:"apiError"`
-	ErrorCode        *string `json:"errorCode"`
-	ErrorMessage     *string `json:"errorMessage"`
-	LocalizedMessage *string `json:"localizedMessage"`
+	APIError         *string         `json:"apiError"`
+	ErrorCode        json.RawMessage `json:"errorCode"`
+	ErrorMessage     *string         `json:"errorMessage"`
+	LocalizedMessage *string         `json:"localizedMessage"`
+}
+
+// decodeErrorCode liest ErrorCode als String ODER Zahl (siehe apiErrorBody-Kommentar) und liefert
+// die String-Repräsentation. Leer, wenn das Feld fehlt oder in keiner der beiden Formen lesbar ist.
+func decodeErrorCode(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String()
+	}
+	return ""
 }
 
 // parseAPIError liest den Response-Body (falls vorhanden) und baut daraus einen *APIError.
@@ -66,8 +92,8 @@ func parseAPIError(status int, body []byte) *APIError {
 	// errorCode ist das spezifischere Feld (z.B. 404-Fälle liefern beide) — vorrangig
 	// verwenden, sonst auf apiError zurückfallen (z.B. 403-Fälle ohne errorCode).
 	switch {
-	case b.ErrorCode != nil:
-		e.Code = *b.ErrorCode
+	case len(b.ErrorCode) > 0 && string(b.ErrorCode) != "null":
+		e.Code = decodeErrorCode(b.ErrorCode)
 	case b.APIError != nil:
 		e.Code = *b.APIError
 	}
