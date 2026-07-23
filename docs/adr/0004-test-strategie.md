@@ -4,7 +4,7 @@
 **Datum:** 2026-07-23
 **Ersetzt:** —
 **Ersetzt durch:** —
-**Verwandt:** ADR-0001, ADR-0003
+**Verwandt:** ADR-0001, ADR-0003, ADR-0005
 
 ## Kontext
 
@@ -44,3 +44,4 @@ Zusätzlich existiert eine Test-Suite, die gegen ein **eigens angelegtes, dedizi
 - [`docs/API.md`](../API.md)
 - `.claude/rules/test-coverage-pflicht.md` (homelab-management-Repo)
 - `.claude/rules/secret-environment-awareness.md` (homelab-management-Repo)
+- [ADR-0005](0005-schonender-betrieb-rate-limiting.md) (Schonender Betrieb / Rate-Limiting)

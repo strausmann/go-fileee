@@ -12,6 +12,7 @@ Neues ADR anlegen: Kopiere [`template.md`](template.md) nach `docs/adr/NNNN-slug
 | [0002](0002-auth-modell-session-cookie-totp.md) | Auth-Modell: Session-Cookie + headless TOTP | accepted | 2026-07-23 |
 | [0003](0003-reverse-engineered-api-risiko.md) | Reverse-engineered internes API (akzeptiertes Risiko) | accepted | 2026-07-23 |
 | [0004](0004-test-strategie.md) | Test-Strategie | accepted | 2026-07-23 |
+| [0005](0005-schonender-betrieb-rate-limiting.md) | Schonender Betrieb / Rate-Limiting | accepted | 2026-07-23 |
 
 ## Status-Werte
 

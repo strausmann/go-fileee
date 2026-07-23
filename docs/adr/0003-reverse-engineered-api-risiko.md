@@ -4,7 +4,7 @@
 **Datum:** 2026-07-23
 **Ersetzt:** —
 **Ersetzt durch:** —
-**Verwandt:** ADR-0001, ADR-0002
+**Verwandt:** ADR-0001, ADR-0002, ADR-0005
 
 ## Kontext
 
@@ -39,3 +39,4 @@ Die Risiken, dass Fileee das interne API jederzeit ohne Ankündigung ändern kan
 ## Referenzen
 
 - [`docs/API.md`](../API.md) Abschnitt 6 (Sicherheits-/Secret-Hinweise), Abschnitt 7 (Offene Verifikationspunkte)
+- [ADR-0005](0005-schonender-betrieb-rate-limiting.md) (Schonender Betrieb / Rate-Limiting)
