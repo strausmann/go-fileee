@@ -1,0 +1,38 @@
+# Go
+/dist/
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+vendor/
+
+# Secrets / Credentials (NIE committen)
+*.env
+.env
+.env.*
+*.session
+*.cookies
+cookies.json
+*.token
+secrets.local.*
+fixtures/*.local.*
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build-Artefakte
+/tmp/
