@@ -71,20 +71,34 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("fileee: cookie jar: %w", err)
 	}
 
+	// base ist der zugrundeliegende RoundTripper, den rateLimitedTransport umwickelt. Wird über
+	// WithHTTPClient ein *http.Client mit eigenem Transport übergeben (z. B. für Custom-TLS oder
+	// Proxy), MUSS dieser als Basis übernommen werden — sonst wird er beim Wrappen stillschweigend
+	// verworfen und WithHTTPClient hätte keinerlei Effekt auf das Transport-Verhalten.
+	base := http.RoundTripper(http.DefaultTransport)
+	if cfg.httpClient != nil && cfg.httpClient.Transport != nil {
+		base = cfg.httpClient.Transport
+	}
+
 	transport := &rateLimitedTransport{
-		base:    http.DefaultTransport,
+		base:    base,
 		limiter: newLimiter(cfg.rps, cfg.burst),
 		backoff: cfg.backoff,
 		jar:     jar,
 		baseURL: cfg.baseURL,
 	}
 
-	hc := cfg.httpClient
-	if hc == nil {
-		hc = &http.Client{}
+	// Die Lib baut ihren EIGENEN *http.Client statt den vom Aufrufer übergebenen zu mutieren — ein
+	// Aufrufer-Objekt zu verändern (Transport/Jar überschreiben) ist ein Seiteneffekt, den eine
+	// Library nicht auslösen darf (der Aufrufer könnte denselben *http.Client anderweitig nutzen).
+	// Der Timeout des Aufrufers wird übernommen, falls einer übergeben wurde.
+	hc := &http.Client{
+		Transport: transport,
+		Jar:       jar,
 	}
-	hc.Jar = jar
-	hc.Transport = transport
+	if cfg.httpClient != nil {
+		hc.Timeout = cfg.httpClient.Timeout
+	}
 
 	store := cfg.sessionStore
 	if store == nil {
