@@ -116,6 +116,115 @@ func TestDocumentAttributesUnmarshalDecktAlleWrapperVariantenAb(t *testing.T) {
 	}
 }
 
+// TestDocumentAttributesUnmarshalGruppenAttributeMitVerschachteltenUnterfeldern belegt das echte
+// Live-Wire-Format der Gruppen-Attribut-Unterfelder (LIVE VERIFIZIERT 2026-07-23,
+// Documents.Upload/Get gegen Testkonto mit einer erfundenen Test-Rechnung, siehe
+// docs/site/operations/protokolle/... im homelab-management-Repo): jedes Unterfeld von
+// amount.data/bankAccount1.data ist selbst ein VOLLER Attribute-Wrapper mit type/value/source —
+// NICHT der nackte Wert, wie es die ursprüngliche Fixture (oben, `TestDocumentAttributesUnmarshal...`)
+// und der Code bis zu diesem Fix annahmen. Vor dem Fix (unwrapNestedValue) dekodierte dieser Fixture
+// Amount als {Value:0 Currency:""} und BankAccount1.IBAN als "" — stiller Datenverlust ohne
+// Fehlermeldung.
+func TestDocumentAttributesUnmarshalGruppenAttributeMitVerschachteltenUnterfeldern(t *testing.T) {
+	raw := []byte(`{
+		"amount": {
+			"modified": "2026-07-23T23:08:27.020Z", "source": "SYSTEM", "type": "COMPOSED", "attributeGroup": "COMPOSED",
+			"data": {
+				"currency": {"type": "ENUMERATION", "modified": "2026-07-23T23:08:27.020Z", "value": "EURO", "source": "SYSTEM", "enumClassName": "Currency"},
+				"value": {"type": "DOUBLE", "modified": "2026-07-23T23:08:27.020Z", "value": 148.75, "source": "SYSTEM"}
+			}
+		},
+		"bankAccount1": {
+			"modified": "2026-07-23T23:08:27.676Z", "source": "SYSTEM", "type": "COMPOSED", "attributeGroup": "COMPOSED",
+			"data": {
+				"iban": {"type": "TEXT", "modified": "2026-07-23T23:08:27.676Z", "value": "DE02120300000000202051", "source": "SYSTEM"}
+			}
+		}
+	}`)
+
+	var attrs DocumentAttributes
+	if err := json.Unmarshal(raw, &attrs); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if attrs.Amount == nil {
+		t.Fatal("Amount ist nil, erwartet gesetzt")
+	}
+	if attrs.Amount.Value != 148.75 {
+		t.Errorf("Amount.Value = %v, erwartet 148.75 (verschachtelter Wrapper wurde nicht entpackt)", attrs.Amount.Value)
+	}
+	if attrs.Amount.Currency != "EURO" {
+		t.Errorf("Amount.Currency = %q, erwartet EURO (Fileee liefert den enumClassName-Wert, kein ISO-Code)", attrs.Amount.Currency)
+	}
+	if attrs.BankAccount1 == nil {
+		t.Fatal("BankAccount1 ist nil, erwartet gesetzt")
+	}
+	if attrs.BankAccount1.IBAN != "DE02120300000000202051" {
+		t.Errorf("BankAccount1.IBAN = %q, erwartet DE02120300000000202051 (verschachtelter Wrapper wurde nicht entpackt)", attrs.BankAccount1.IBAN)
+	}
+	// bic/bank/account_holder fehlen bewusst in dieser Fixture (Fileee hat sie beim echten Testlauf
+	// nicht extrahiert) -> müssen leer, nicht mit Datenmüll befüllt sein.
+	if attrs.BankAccount1.BIC != "" || attrs.BankAccount1.Bank != "" || attrs.BankAccount1.AccountHolder != "" {
+		t.Errorf("BankAccount1 hat unerwartete Werte für nicht gelieferte Unterfelder: %+v", attrs.BankAccount1)
+	}
+}
+
+// TestUnwrapNestedValueIstFailSafeBeiFlachenWerten stellt sicher, dass unwrapNestedValue einen
+// bereits flachen Rohwert (die ursprünglich angenommene, jetzt widerlegte Wire-Form) unverändert
+// durchreicht statt ihn zu verwerfen (ADR-0003 fail-safe) — insb. damit setGroupMoney/
+// setGroupBankAccount (die weiterhin flach kodieren) im Round-Trip-Test weiterhin korrekt
+// dekodiert werden.
+func TestUnwrapNestedValueIstFailSafeBeiFlachenWerten(t *testing.T) {
+	cases := []json.RawMessage{
+		json.RawMessage(`"EUR"`),
+		json.RawMessage(`42.5`),
+		json.RawMessage(`null`),
+		json.RawMessage(`[]`),
+	}
+	for _, c := range cases {
+		got := unwrapNestedValue(c)
+		if string(got) != string(c) {
+			t.Errorf("unwrapNestedValue(%s) = %s, erwartet unverändert", c, got)
+		}
+	}
+
+	nested := json.RawMessage(`{"type":"DOUBLE","value":148.75,"source":"SYSTEM"}`)
+	if got := string(unwrapNestedValue(nested)); got != "148.75" {
+		t.Errorf("unwrapNestedValue(nested) = %s, erwartet 148.75 (ein Level entpackt)", got)
+	}
+}
+
+// TestDecodeTimeValueAkzeptiertReinesDatumOhneUhrzeit belegt das zweite Live-Wire-Format von
+// "type":"DATE"-Attributen (LIVE VERIFIZIERT 2026-07-23, Documents.Get gegen Testkonto): Fileee
+// liefert invoiceDate/issueDate als reines Datum "2026-07-15", nicht als RFC3339-Datetime. Vor
+// diesem Fix dekodierte decodeTimeValue das still zu nil (Parse-Fehler wurde verschluckt).
+func TestDecodeTimeValueAkzeptiertReinesDatumOhneUhrzeit(t *testing.T) {
+	got := decodeTimeValue(json.RawMessage(`"2026-07-15"`))
+	if got == nil {
+		t.Fatal("decodeTimeValue(reines Datum) = nil, erwartet 2026-07-15 (Live-Wire-Format von DATE-Attributen wird verworfen)")
+	}
+	if got.Year() != 2026 || got.Month() != time.July || got.Day() != 15 {
+		t.Errorf("decodeTimeValue(reines Datum) = %v, erwartet 2026-07-15", got)
+	}
+
+	// RFC3339 (die ursprünglich angenommene, ebenfalls beobachtete Form) muss weiterhin
+	// funktionieren -> kein Regressions-Verlust der bestehenden Fixture-Annahme.
+	rfc, err := time.Parse(time.RFC3339, "2026-01-02T00:00:00Z")
+	if err != nil {
+		t.Fatalf("Test-Setup: %v", err)
+	}
+	gotRFC := decodeTimeValue(json.RawMessage(`"2026-01-02T00:00:00Z"`))
+	if gotRFC == nil || !gotRFC.Equal(rfc) {
+		t.Errorf("decodeTimeValue(RFC3339) = %v, erwartet %v", gotRFC, rfc)
+	}
+
+	if got := decodeTimeValue(json.RawMessage(`""`)); got != nil {
+		t.Errorf("decodeTimeValue(leer) = %v, erwartet nil", got)
+	}
+	if got := decodeTimeValue(json.RawMessage(`"nicht-ein-datum"`)); got != nil {
+		t.Errorf("decodeTimeValue(Datenmüll) = %v, erwartet nil (fail-safe)", got)
+	}
+}
+
 func TestDocumentAttributesMarshalRoundTripBenannteFelder(t *testing.T) {
 	in := DocumentAttributes{
 		Title:    "Neuer Titel",

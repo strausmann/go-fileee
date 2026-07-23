@@ -3,6 +3,7 @@
 package fileee
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -35,7 +36,9 @@ func TestIntegrationLiveFileee(t *testing.T) {
 		t.Skip("FILEEE_USERNAME/FILEEE_PASSWORD nicht gesetzt — Live-Integrationstest übersprungen")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// 6 Minuten Gesamtbudget: Login + Punkt C/D/E (schnell) + Punkt F (Upload, Analyse-Polling bis
+	// zu 3 Min, Downloads, Query, Cleanup) teilen sich diesen einen Kontext.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
 	// Eigener, isolierter Session-Store im Test-Tempdir — berührt keinen produktiven Session-Cache.
@@ -188,5 +191,173 @@ func TestIntegrationLiveFileee(t *testing.T) {
 			return
 		}
 		t.Logf("Befund E (Write/Update): Contacts.Update erfolgreich, Email im Response aktualisiert=%v", updated.Email == created.Email)
+	})
+
+	// --- Punkt F: kompletter Dokument-Lebenszyklus (Upload -> Analyse-Polling -> Metadaten ->
+	// Download PDF/Seiten-Bild -> Query -> hartes Löschen). Nutzt eine erfundene Test-Rechnung
+	// (testdata/rechnung-livecheck.pdf, Quelle testdata/rechnung-livecheck.html) — Kernfrage: welche
+	// attributes.data-Felder extrahiert Fileees Auto-Analyse aus einer Rechnung (API.md §5)?
+	t.Run("PunktF_DokumentLebenszyklus", func(t *testing.T) {
+		pdfBytes, err := os.ReadFile(filepath.Join("testdata", "rechnung-livecheck.pdf"))
+		if err != nil {
+			t.Fatalf("Befund F: Test-PDF lesen fehlgeschlagen: %v", err)
+		}
+
+		// a) Upload
+		uploadResult, errUpload := client.Documents.Upload(ctx, bytes.NewReader(pdfBytes), UploadMetadata{
+			Title: "ZZZ-gofileee-livecheck-Rechnung",
+		})
+		if errUpload != nil {
+			t.Fatalf("Befund F (Upload): Documents.Upload fehlgeschlagen: %v — kein Dokument angelegt, kein Cleanup nötig", errUpload)
+		}
+		docID := uploadResult.Document.ID
+		t.Logf("Befund F (Upload): id gesetzt=%v pages=%d initialer status=%s isDuplicate=%v",
+			docID != "", len(uploadResult.Document.Pages), uploadResult.Document.Status, uploadResult.IsDuplicate)
+		if uploadResult.IsDuplicate {
+			t.Log("Befund F (Upload): Server meldet Duplicate — erwartet war ein frisches Dokument, weiter untersuchen")
+		}
+
+		cleanedUp := false
+		defer func() {
+			if cleanedUp || docID == "" {
+				return
+			}
+			req, errReq := http.NewRequestWithContext(ctx, http.MethodDelete, client.baseURL+"/api/documents/rest/"+docID, nil)
+			if errReq != nil {
+				t.Logf("Cleanup F: DELETE-Request konnte nicht gebaut werden: %v — Test-Dokument ZZZ-gofileee-livecheck-Rechnung bleibt bestehen, manuelles Aufräumen nötig", errReq)
+				return
+			}
+			resp, errDo := client.httpClient.Do(req)
+			if errDo != nil {
+				t.Logf("Cleanup F: DELETE fehlgeschlagen (Netzwerk): %v — Test-Dokument bleibt bestehen, manuelles Aufräumen nötig", errDo)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+				t.Log("Cleanup F: hartes DELETE auf Document erfolgreich, Test-Dokument entfernt")
+				cleanedUp = true
+				return
+			}
+			t.Logf("Cleanup F: DELETE lieferte Status %d — hartes Löschen nicht möglich/nicht unterstützt (API.md §4.1 „vor produktivem Einsatz verifizieren“ bestätigt sich hier ggf.), Test-Dokument ZZZ-gofileee-livecheck-Rechnung bleibt bestehen, manuelles Aufräumen im Testkonto nötig", resp.StatusCode)
+		}()
+
+		// b) Auf Fileees Analyse warten — schonendes Polling (Skill "Fileee-Infra schonen"):
+		// ~12s-Intervall, Timeout ~3 Min, kein Hämmern.
+		const pollInterval = 12 * time.Second
+		const pollTimeout = 3 * time.Minute
+		deadline := time.Now().Add(pollTimeout)
+		statusHistory := []PublicDocumentStatus{uploadResult.Document.Status}
+		lastStatus := uploadResult.Document.Status
+		var final *Document
+	pollLoop:
+		for {
+			doc, errGet := client.Documents.Get(ctx, docID)
+			if errGet != nil {
+				t.Logf("Befund F (Polling): Documents.Get fehlgeschlagen: %v", errGet)
+				break pollLoop
+			}
+			final = doc
+			if doc.Status != lastStatus {
+				statusHistory = append(statusHistory, doc.Status)
+				lastStatus = doc.Status
+			}
+			switch doc.Status {
+			case StatusDone, StatusClassified, StatusError:
+				break pollLoop
+			}
+			if time.Now().After(deadline) {
+				t.Logf("Befund F (Polling): Timeout (%s) erreicht, letzter Status=%s — Analyse nicht abgeschlossen, arbeite mit Zwischenstand weiter", pollTimeout, doc.Status)
+				break pollLoop
+			}
+			select {
+			case <-ctx.Done():
+				t.Logf("Befund F (Polling): Kontext beendet: %v", ctx.Err())
+				break pollLoop
+			case <-time.After(pollInterval):
+			}
+		}
+		t.Logf("Befund F (Status-Verlauf): %v", statusHistory)
+		if final == nil {
+			t.Fatal("Befund F: kein finales Dokument-Objekt geladen — Documents.Get war nie erfolgreich")
+		}
+
+		// c) Extrahierte attributes.data-Metadaten — Kernfrage dieses Laufs (API.md §5).
+		attrs := final.Attributes
+		t.Logf("Befund F (Metadaten) title: gesetzt=%v wert=%q", attrs.Title != "", attrs.Title)
+		t.Logf("Befund F (Metadaten) documentTypeId: gesetzt=%v wert=%q", attrs.DocumentTypeID != "", attrs.DocumentTypeID)
+		t.Logf("Befund F (Metadaten) invoiceId: gesetzt=%v wert=%q", attrs.InvoiceID != "", attrs.InvoiceID)
+		if attrs.InvoiceDate != nil {
+			t.Logf("Befund F (Metadaten) invoiceDate: gesetzt=true wert=%s", attrs.InvoiceDate.Format("2006-01-02"))
+		} else {
+			t.Log("Befund F (Metadaten) invoiceDate: gesetzt=false")
+		}
+		if attrs.InvoiceDueDate != nil {
+			t.Logf("Befund F (Metadaten) invoiceDueDate: gesetzt=true wert=%s", attrs.InvoiceDueDate.Format("2006-01-02"))
+		} else {
+			t.Log("Befund F (Metadaten) invoiceDueDate: gesetzt=false")
+		}
+		if attrs.Amount != nil {
+			t.Logf("Befund F (Metadaten) amount: gesetzt=true wert=%.2f %s", attrs.Amount.Value, attrs.Amount.Currency)
+		} else {
+			t.Log("Befund F (Metadaten) amount: gesetzt=false")
+		}
+		t.Logf("Befund F (Metadaten) senderId: gesetzt=%v wert=%q", attrs.SenderID != "", attrs.SenderID)
+		t.Logf("Befund F (Metadaten) customerId: gesetzt=%v wert=%q", attrs.CustomerID != "", attrs.CustomerID)
+		if attrs.BankAccount1 != nil {
+			t.Logf("Befund F (Metadaten) bankAccount1: gesetzt=true iban=%q bic=%q bank=%q accountHolder=%q",
+				attrs.BankAccount1.IBAN, attrs.BankAccount1.BIC, attrs.BankAccount1.Bank, attrs.BankAccount1.AccountHolder)
+		} else {
+			t.Log("Befund F (Metadaten) bankAccount1: gesetzt=false")
+		}
+		t.Logf("Befund F (Metadaten) paymentReference: gesetzt=%v wert=%q", attrs.PaymentReference != "", attrs.PaymentReference)
+		if len(attrs.RawExtra) > 0 {
+			keys := make([]string, 0, len(attrs.RawExtra))
+			for k := range attrs.RawExtra {
+				keys = append(keys, k)
+			}
+			t.Logf("Befund F (Metadaten) weitere, bisher unbekannte attributes.data-Schlüssel (RawExtra): %v", keys)
+		}
+
+		// d) Download PDF (primärer Export-Weg, API.md §4.1)
+		if pdfReader, errPDF := client.Documents.DownloadPDF(ctx, docID, PDFModeDownload); errPDF != nil {
+			t.Logf("Befund F (DownloadPDF): fehlgeschlagen: %v", errPDF)
+		} else {
+			downloaded, errRead := io.ReadAll(pdfReader)
+			pdfReader.Close()
+			if errRead != nil {
+				t.Logf("Befund F (DownloadPDF): Lesen fehlgeschlagen: %v", errRead)
+			} else {
+				isPDF := len(downloaded) > 4 && string(downloaded[:4]) == "%PDF"
+				t.Logf("Befund F (DownloadPDF): bytes=%d isPDF(MagicBytes)=%v", len(downloaded), isPDF)
+			}
+		}
+
+		// e) Download Seiten-Bild (Fallback-Weg, API.md §4.1) — nur wenn pages[] vorhanden
+		if len(final.Pages) > 0 {
+			page := final.Pages[0]
+			if imgReader, errImg := client.Documents.DownloadPageImage(ctx, page.ID, ImageSizeMedium, int64(page.ImageVersion)); errImg != nil {
+				t.Logf("Befund F (DownloadPageImage): fehlgeschlagen: %v", errImg)
+			} else {
+				imgBytes, errRead := io.ReadAll(imgReader)
+				imgReader.Close()
+				if errRead != nil {
+					t.Logf("Befund F (DownloadPageImage): Lesen fehlgeschlagen: %v", errRead)
+				} else {
+					isJPEG := len(imgBytes) > 2 && imgBytes[0] == 0xFF && imgBytes[1] == 0xD8
+					t.Logf("Befund F (DownloadPageImage): bytes=%d isJPEG(MagicBytes)=%v", len(imgBytes), isJPEG)
+				}
+			}
+		} else {
+			t.Log("Befund F (DownloadPageImage): Dokument hat kein pages[] — übersprungen")
+		}
+
+		// f) Query (Gegenstück zu Diff, API.md §3)
+		if queryResult, errQuery := client.Documents.Query(ctx, QueryOptions{Limit: 10}); errQuery != nil {
+			t.Logf("Befund F (Query): Documents.Query fehlgeschlagen: %v", errQuery)
+		} else {
+			t.Logf("Befund F (Query): Documents.Query erfolgreich -> rows=%d totalRows=%d", len(queryResult.Rows), queryResult.TotalRows)
+		}
+
+		// g) Hartes Löschen läuft über das oben registrierte defer (Cleanup F).
 	})
 }

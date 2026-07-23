@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Rechnung RE-2026-0042</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #111; margin: 40px; }
+  .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+  .sender { text-align: right; font-size: 9pt; color: #444; }
+  .recipient { margin-top: 20px; margin-bottom: 40px; }
+  h1 { font-size: 16pt; margin-bottom: 4px; }
+  table.meta { border-collapse: collapse; margin-bottom: 30px; }
+  table.meta td { padding: 2px 12px 2px 0; }
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  table.items th, table.items td { border-bottom: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+  table.items th { background: #f0f0f0; }
+  table.items td.amount, table.items th.amount { text-align: right; }
+  table.totals { width: 300px; margin-left: auto; border-collapse: collapse; }
+  table.totals td { padding: 3px 8px; }
+  table.totals tr.grand td { font-weight: bold; border-top: 2px solid #111; }
+  .payment { margin-top: 30px; font-size: 10pt; }
+  .footer { margin-top: 60px; font-size: 8pt; color: #777; }
+</style>
+</head>
+<body>
+
+<div class="sender">
+  Muster Handels GmbH<br>
+  Musterstraße 1<br>
+  21073 Hamburg<br>
+  USt-IdNr.: DE123456789
+</div>
+
+<h1>Rechnung</h1>
+
+<div class="recipient">
+  Solidius Test<br>
+  Testweg 2<br>
+  20095 Hamburg<br>
+  Kundennummer: KD-100042
+</div>
+
+<table class="meta">
+  <tr><td>Rechnungsnummer:</td><td><strong>RE-2026-0042</strong></td></tr>
+  <tr><td>Rechnungsdatum:</td><td>15.07.2026</td></tr>
+  <tr><td>Fälligkeitsdatum:</td><td>29.07.2026</td></tr>
+  <tr><td>Kundennummer:</td><td>KD-100042</td></tr>
+</table>
+
+<table class="items">
+  <thead>
+    <tr>
+      <th>Pos.</th>
+      <th>Beschreibung</th>
+      <th class="amount">Menge</th>
+      <th class="amount">Einzelpreis (netto)</th>
+      <th class="amount">Gesamt (netto)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td>Beratungsleistung Musterprojekt</td>
+      <td class="amount">5,0 Std.</td>
+      <td class="amount">15,00 EUR</td>
+      <td class="amount">75,00 EUR</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Materialpauschale</td>
+      <td class="amount">1</td>
+      <td class="amount">25,00 EUR</td>
+      <td class="amount">25,00 EUR</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>Versand &amp; Handling</td>
+      <td class="amount">1</td>
+      <td class="amount">25,00 EUR</td>
+      <td class="amount">25,00 EUR</td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="totals">
+  <tr><td>Nettobetrag:</td><td class="amount">125,00 EUR</td></tr>
+  <tr><td>zzgl. 19% MwSt.:</td><td class="amount">23,75 EUR</td></tr>
+  <tr class="grand"><td>Gesamtbetrag:</td><td class="amount">148,75 EUR</td></tr>
+</table>
+
+<div class="payment">
+  <strong>Zahlungsinformationen</strong><br>
+  Bitte überweisen Sie den Rechnungsbetrag bis zum Fälligkeitsdatum unter Angabe des
+  Verwendungszwecks auf folgendes Konto:<br><br>
+  IBAN: DE02 1203 0000 0000 2020 51<br>
+  BIC: BYLADEM1001<br>
+  Verwendungszweck: RE-2026-0042
+</div>
+
+<div class="footer">
+  Muster Handels GmbH · Musterstraße 1 · 21073 Hamburg · USt-IdNr. DE123456789<br>
+  Dieses Dokument enthält ausschließlich erfundene Testdaten und dient der Verifikation der
+  go-fileee Bibliothek gegen ein Fileee-Testkonto.
+</div>
+
+</body>
+</html>

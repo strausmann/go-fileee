@@ -292,16 +292,58 @@ func decodeStringSliceValue(raw json.RawMessage) []string {
 	return s
 }
 
+// dateOnlyLayout ist das zweite, LIVE VERIFIZIERTE Zeitformat für "type":"DATE"-Attribute
+// (2026-07-23, Documents.Get gegen Testkonto: invoiceDate/issueDate einer echten, von Fileee
+// analysierten Rechnung kamen als reines Datum "2026-07-15", NICHT als RFC3339-Datetime wie
+// "2026-01-02T00:00:00Z" — die ursprüngliche Annahme/Testfixture ging ausschließlich von
+// RFC3339 aus). Vor diesem Fix lieferte decodeTimeValue für jedes echte DATE-Attribut still nil
+// zurück (Parse-Fehler wurde verschluckt) — InvoiceDate/IssueDate/InvoiceDueDate gingen dadurch
+// bei jeder Fileee-Auto-Analyse verloren, obwohl der Server den Wert korrekt lieferte.
+const dateOnlyLayout = "2006-01-02"
+
 func decodeTimeValue(raw json.RawMessage) *time.Time {
 	s := decodeStringValue(raw)
 	if s == "" {
 		return nil
 	}
-	t, err := time.Parse(time.RFC3339, s)
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return &t
+	}
+	t, err := time.Parse(dateOnlyLayout, s)
 	if err != nil {
 		return nil
 	}
 	return &t
+}
+
+// nestedAttributeValueWrapper spiegelt EIN Verschachtelungslevel eines Gruppen-Attribut-Unterfelds
+// (z. B. amount.data.value, bankAccount1.data.iban) — LIVE VERIFIZIERT (2026-07-23,
+// Documents.Upload/Get gegen Testkonto mit einer erfundenen Test-Rechnung): jedes Unterfeld von
+// `data` ist selbst ein VOLLER Attribute-Wrapper ({"type":"DOUBLE","value":148.75,"source":
+// "SYSTEM"} bzw. {"type":"TEXT","value":"DE0212...","source":"SYSTEM"}), NICHT der nackte Wert.
+// API.md §5 deutete das mit "data trägt rekursiv dieselbe Wrapper-Struktur" bereits an, die
+// ursprüngliche Implementierung (und das dazugehörige Beispiel `amount.data = {currency, value}`)
+// hatte diese eine Verschachtelungsebene aber übersehen und griff direkt auf `data["value"]` als
+// wäre es bereits der Rohwert zu — dadurch dekodierte Documents.Get bei einer echten,
+// Fileee-analysierten Rechnung IMMER Amount.Value=0/Amount.Currency="" und leere
+// BankAccount1-Felder, obwohl der Server die Werte korrekt geliefert hatte (stiller Datenverlust,
+// kein Fehler sichtbar).
+type nestedAttributeValueWrapper struct {
+	Value json.RawMessage `json:"value"`
+}
+
+// unwrapNestedValue entpackt genau eine Verschachtelungsebene, falls raw ein Objekt mit
+// "value"-Schlüssel ist (echtes Live-Wire-Format der Gruppen-Attribut-Unterfelder, s.o.). Ist raw
+// KEIN solches Objekt (z. B. weil ein Aufrufer/Testfixture den ursprünglich angenommenen flachen
+// Wert liefert, oder ein zukünftiger Endpunkt tatsächlich flach antwortet), wird raw unverändert
+// zurückgegeben — fail-safe nach ADR-0003: eine falsche Annahme darf höchstens zu einem
+// unveränderten Rohwert führen, nie zu einem zusätzlichen Datenverlust.
+func unwrapNestedValue(raw json.RawMessage) json.RawMessage {
+	var w nestedAttributeValueWrapper
+	if err := json.Unmarshal(raw, &w); err == nil && len(w.Value) > 0 {
+		return w.Value
+	}
+	return raw
 }
 
 func decodeMoneyGroup(data map[string]json.RawMessage) *Money {
@@ -310,11 +352,11 @@ func decodeMoneyGroup(data map[string]json.RawMessage) *Money {
 	}
 	m := &Money{}
 	if v, ok := data["currency"]; ok {
-		m.Currency = decodeStringValue(v)
+		m.Currency = decodeStringValue(unwrapNestedValue(v))
 	}
 	if v, ok := data["value"]; ok {
 		var f float64
-		_ = json.Unmarshal(v, &f)
+		_ = json.Unmarshal(unwrapNestedValue(v), &f)
 		m.Value = f
 	}
 	return m
@@ -326,16 +368,16 @@ func decodeBankAccountGroup(data map[string]json.RawMessage) *BankAccount {
 	}
 	b := &BankAccount{}
 	if v, ok := data["iban"]; ok {
-		b.IBAN = decodeStringValue(v)
+		b.IBAN = decodeStringValue(unwrapNestedValue(v))
 	}
 	if v, ok := data["bic"]; ok {
-		b.BIC = decodeStringValue(v)
+		b.BIC = decodeStringValue(unwrapNestedValue(v))
 	}
 	if v, ok := data["bank"]; ok {
-		b.Bank = decodeStringValue(v)
+		b.Bank = decodeStringValue(unwrapNestedValue(v))
 	}
 	if v, ok := data["account_holder"]; ok {
-		b.AccountHolder = decodeStringValue(v)
+		b.AccountHolder = decodeStringValue(unwrapNestedValue(v))
 	}
 	return b
 }
