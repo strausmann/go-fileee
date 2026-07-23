@@ -87,6 +87,63 @@ func TestTagServiceQueryHappyErrorNetwork(t *testing.T) {
 	})
 }
 
+// TestTagServiceGetHappyErrorNetwork deckt restService[T].Get() vollständig ab — bisher war nur
+// der 404-Zweig (TestTagServiceGet404LiefertErrNotFound) getestet, der Erfolgspfad (200 ->
+// dekodierte Entity) lief nie durch einen Test. Ergänzt Happy-Path, Error-Path (5xx) und
+// Network-Error, analog zum Query-Pendant TestTagServiceQueryHappyErrorNetwork.
+func TestTagServiceGetHappyErrorNetwork(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"GET /api/tags/rest/tag-1": {Status: 200, Body: []byte(`{"id":"tag-1","name":"Rechnung","colorCode":"#ff0000"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		tag, err := client.Tags.Get(context.Background(), "tag-1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if tag.ID != "tag-1" || tag.Name != "Rechnung" || tag.ColorCode != "#ff0000" {
+			t.Fatalf("Get-Ergebnis falsch dekodiert: %+v", tag)
+		}
+	})
+
+	t.Run("error path 500", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"GET /api/tags/rest/tag-1": {Status: 500, Body: []byte(`{"apiError":"internal"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		_, err := client.Tags.Get(context.Background(), "tag-1")
+		if err == nil {
+			t.Fatalf("erwartet Fehler bei 500, bekommen nil")
+		}
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("erwartet gewrapptes *APIError, bekommen %T: %v", err, err)
+		}
+		if apiErr.HTTPStatus != 500 {
+			t.Fatalf("erwarteter HTTPStatus 500, bekommen %d", apiErr.HTTPStatus)
+		}
+	})
+
+	t.Run("network error", func(t *testing.T) {
+		client, err := New(
+			Credentials{Username: "test@example.invalid", Password: "test-pw"},
+			WithBaseURL("http://127.0.0.1:1"),
+			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+		)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, err = client.Tags.Get(context.Background(), "tag-1")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
+		}
+	})
+}
+
 func TestTagServiceGet404LiefertErrNotFound(t *testing.T) {
 	routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
 		"GET /api/tags/rest/unbekannt": {Status: 404, Body: []byte(`{"errorCode":"NOT_FOUND"}`)},
