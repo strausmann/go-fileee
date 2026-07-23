@@ -44,7 +44,7 @@ jobs:
           #   Schwellen auf die Zieltabelle angehoben (Tests nachgezogen) oder das
           #   Tracking-Issue verlängert/neu bewertet werden.
           #   Tracking: Coverage-Schwellen auf Umbrella-Spec §9 anheben (auth/session 90,
-          #   documenttypes 80) — Issue folgt.
+          #   documenttypes 80) — https://github.com/strausmann/go-fileee/issues/6
           ./scripts/coverage-gate-strict.sh cover.out \
             fileee/auth.go:85 \
             fileee/session.go:60 \
