@@ -180,6 +180,20 @@ token=<token>
 einmal per Passwort+TOTP einloggen, `rememberMe` aus `Set-Cookie` übernehmen, danach ohne
 erneutes Passwort+TOTP re-authentifizieren.
 
+**LIVE bestätigt (part4, 2026-07-23 — Session-Cookie manuell gelöscht):** Fällt das
+`JSESSIONID`-Cookie weg, antworten geschützte Endpunkte mit **`403 Forbidden`** (NICHT `401`) —
+auch bei gesetztem `x-xsrf-token`-Header, weil der `XSRF-TOKEN`-Cookie mit der Session weg ist und
+das Double-Submit fehlschlägt (403-Body bei `diff`-Endpunkten leer; bei `/f/exists`
+`{apiError, errorMessage, localizedMessage}`). Bei gültigem `rememberMe` erholt sich die App via
+`POST /api/f/token/login` → **200** (neue Session + frischer `XSRF-TOKEN`). Ist auch `rememberMe`
+ungültig, wirft ein Reload auf die **Login-Seite** zurück (voller Passwort+TOTP-Login nötig).
+
+→ **Re-Auth-Regel der Go-Lib (Transport-Layer):** Trigger ist **`403`** (nicht nur `401`/
+`authorized:false`). Bei `403` auf einem geschützten Endpunkt: einmal `POST /api/f/token/login`
+mit `rememberMe` fahren, `XSRF-TOKEN` frisch aus dem Jar lesen, den Request **1×** wiederholen
+(mutex-geschützt, kein Stampede). Schlägt das fehl (kein gültiges `rememberMe`): voller
+Passwort+TOTP-Login.
+
 ### 2.7 `POST /api/f/logout` (NEU, code-belegt)
 
 Kein Body. Gegenstück zu `/f/login` — beendet die Session serverseitig. Bisher in keinem HAR
