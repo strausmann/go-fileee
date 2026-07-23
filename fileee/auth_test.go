@@ -200,3 +200,256 @@ func TestPersistSessionUndCookieValue(t *testing.T) {
 		t.Fatalf("persistSession hat die Session nicht gespeichert: %v / %+v", err, sess)
 	}
 }
+
+func TestEnsureSessionMitGueltigGespeicherterSession(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/f/user-session": {Status: 200, Body: []byte(`{"authorized":true,"secondsBlocked":0}`)},
+	}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	if err := a.store.Save(context.Background(), &Session{Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "sess-x"}}}); err != nil {
+		t.Fatalf("Setup Save: %v", err)
+	}
+	if err := a.EnsureSession(context.Background()); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+}
+
+func TestEnsureSessionSecondsBlocked(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/f/user-session": {Status: 200, Body: []byte(`{"authorized":true,"secondsBlocked":42}`)},
+	}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	_ = a.store.Save(context.Background(), &Session{Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "sess-x"}}})
+
+	err := a.EnsureSession(context.Background())
+	var blocked *BlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("erwartet *BlockedError, bekommen %v", err)
+	}
+	if blocked.SecondsBlocked != 42 {
+		t.Fatalf("SecondsBlocked = %d, erwartet 42", blocked.SecondsBlocked)
+	}
+}
+
+func TestEnsureSessionOhneGespeicherteSessionFuehrtVollenLoginDurch(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/f/start":     {Status: 204},
+		"POST /api/f/existent": {Status: 200, Body: []byte(`{"existent":true,"twoFactorAuthEnabled":false}`)},
+		"POST /api/f/login":    {Status: 200, Body: []byte(`{"loggedIn":true}`), Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "sess-neu"}}},
+	}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	if err := a.EnsureSession(context.Background()); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+}
+
+func TestTokenLoginOhneRememberMeCookieLiefertErrSessionExpired(t *testing.T) {
+	srv := newMockServer(t, jsonHandler(t, map[string]mockRoute{}))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	err := a.tokenLogin(context.Background())
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("erwartet ErrSessionExpired, bekommen %v", err)
+	}
+}
+
+// TestTokenLoginHappyPathSendetTokenUndPersistiertSession deckt den bisher ungetesteten
+// Erfolgspfad von tokenLogin direkt ab (Review-Finding: der primäre rememberMe-Re-Auth-Pfad war
+// nur "durch Lesen verifiziert", nie tatsächlich ausgeführt). Ein eigener Handler (statt
+// jsonHandler, das keine Request-Bodies erfasst) stubbt POST /api/f/token/login, prüft das
+// gesendete form-Feld "token" und liefert ein Platzhalter-Session-Cookie zurück.
+func TestTokenLoginHappyPathSendetTokenUndPersistiertSession(t *testing.T) {
+	var sawTokenLoginCall bool
+	var capturedToken string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/f/token/login" {
+			sawTokenLoginCall = true
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("ParseForm: %v", err)
+			}
+			capturedToken = r.FormValue("token")
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "sess-token-login-placeholder"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"apiError":"route_not_mocked","errorMessage":"keine Mock-Route für ` + r.Method + " " + r.URL.Path + `"}`))
+	}
+	srv := newMockServer(t, http.HandlerFunc(handler))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+
+	// rememberMe-Cookie (Platzhalter-Wert, kein echtes JWT) so in den Jar legen, als stamme er aus
+	// einer vorherigen Session — simuliert exakt den Zustand, den tokenLogin über cookieValue()
+	// vorfindet.
+	scopeURL, err := a.authCookieScopeURL()
+	if err != nil {
+		t.Fatalf("authCookieScopeURL: %v", err)
+	}
+	a.hc.Jar.SetCookies(scopeURL, []*http.Cookie{{Name: "rememberMe", Value: "remember-placeholder-token"}})
+
+	if err := a.tokenLogin(context.Background()); err != nil {
+		t.Fatalf("tokenLogin: unerwarteter Fehler %v", err)
+	}
+	if !sawTokenLoginCall {
+		t.Fatalf("POST /api/f/token/login wurde nicht aufgerufen")
+	}
+	if capturedToken != "remember-placeholder-token" {
+		t.Fatalf("gesendetes form-Feld token = %q, erwartet remember-placeholder-token", capturedToken)
+	}
+	sess, err := a.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load nach tokenLogin: %v", err)
+	}
+	if sess == nil || len(sess.Cookies) == 0 {
+		t.Fatalf("tokenLogin hat die Session nicht persistiert: sess=%+v", sess)
+	}
+}
+
+// TestEnsureSessionAbgelaufenMitRememberMeNutztTokenLoginNichtVollenLogin deckt den zweiten Teil
+// des Review-Findings ab: EnsureSession muss bei einer abgelaufenen, aber mit rememberMe-Cookie
+// versehenen gespeicherten Session über reauthenticate() den token/login-Pfad nehmen — NICHT den
+// vollen Passwort+TOTP-Login. Die Mock-Routen für /api/f/start, /api/f/existent und /api/f/login
+// sind bewusst so gebaut, dass ein Aufruf sofort auffällt (500 + Flag), statt still durchzulaufen.
+func TestEnsureSessionAbgelaufenMitRememberMeNutztTokenLoginNichtVollenLogin(t *testing.T) {
+	var tokenLoginCalled, fullLoginCalled bool
+	var capturedToken string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/f/user-session":
+			// Abgelaufene Session: authorized:false, aber kein Server-Fehler.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"authorized":false,"secondsBlocked":0}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/f/token/login":
+			tokenLoginCalled = true
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("ParseForm: %v", err)
+			}
+			capturedToken = r.FormValue("token")
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: "sess-renewed-placeholder"})
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/f/start" || r.URL.Path == "/api/f/existent" || r.URL.Path == "/api/f/login":
+			// Voller Login darf hier NICHT laufen — wird token/login sauber genutzt, kommt dieser
+			// Zweig nie zum Zug (reauthenticate kehrt schon bei erfolgreichem tokenLogin zurück).
+			fullLoginCalled = true
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"apiError":"route_not_mocked","errorMessage":"keine Mock-Route für ` + r.Method + " " + r.URL.Path + `"}`))
+		}
+	}
+	srv := newMockServer(t, http.HandlerFunc(handler))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+
+	// Gespeicherte, abgelaufene Session mit rememberMe-Cookie (Platzhalter) — wie sie EnsureSession
+	// beim Prozessstart aus dem SessionStore lädt.
+	if err := a.store.Save(context.Background(), &Session{
+		Cookies: []*http.Cookie{
+			{Name: "JSESSIONID", Value: "sess-old-expired-placeholder"},
+			{Name: "rememberMe", Value: "remember-placeholder-existing"},
+		},
+	}); err != nil {
+		t.Fatalf("Setup Save: %v", err)
+	}
+
+	if err := a.EnsureSession(context.Background()); err != nil {
+		t.Fatalf("EnsureSession: unerwarteter Fehler %v", err)
+	}
+	if !tokenLoginCalled {
+		t.Fatalf("POST /api/f/token/login wurde nicht aufgerufen — rememberMe-Branch wurde nicht genutzt")
+	}
+	if fullLoginCalled {
+		t.Fatalf("voller Passwort+TOTP-Login wurde aufgerufen, obwohl token/login erfolgreich war")
+	}
+	if capturedToken != "remember-placeholder-existing" {
+		t.Fatalf("gesendetes form-Feld token = %q, erwartet remember-placeholder-existing", capturedToken)
+	}
+	sess, err := a.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load nach EnsureSession: %v", err)
+	}
+	if sess == nil || len(sess.Cookies) == 0 {
+		t.Fatalf("Session wurde nach dem token/login-Re-Auth nicht erneuert: sess=%+v", sess)
+	}
+}
+
+func TestReauthenticateFaelltAufVollenLoginZurueck(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/f/start":     {Status: 204},
+		"POST /api/f/existent": {Status: 200, Body: []byte(`{"existent":true,"twoFactorAuthEnabled":false}`)},
+		"POST /api/f/login":    {Status: 200, Body: []byte(`{"loggedIn":true}`), Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "sess-fallback"}}},
+	}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	// Kein rememberMe-Cookie gesetzt -> tokenLogin schlägt fehl -> Fallback auf login().
+	if err := a.reauthenticate(context.Background()); err != nil {
+		t.Fatalf("reauthenticate: %v", err)
+	}
+}
+
+func TestLogout(t *testing.T) {
+	routes := map[string]mockRoute{"POST /api/f/logout": {Status: 200}}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	if err := a.logout(context.Background()); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	sess, err := a.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load nach logout: %v", err)
+	}
+	if sess != nil && len(sess.Cookies) != 0 {
+		t.Fatalf("erwartet leere Session nach logout, bekommen %+v", sess)
+	}
+}
+
+func TestAccountStatusHappyErrorUndNetwork(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		routes := map[string]mockRoute{
+			"GET /api/f/user-session":   {Status: 200, Body: []byte(`{"authorized":true,"secondsBlocked":0}`)},
+			"GET /api/f/account-status": {Status: 200, Body: []byte(`{"accountTypeId":"premium","currentSubscription":{"name":"Pro","frequency":"monthly","amount":9.99}}`)},
+		}
+		srv := newMockServer(t, jsonHandler(t, routes))
+		a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+		_ = a.store.Save(context.Background(), &Session{Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "sess-x"}}})
+		status, err := a.accountStatus(context.Background())
+		if err != nil {
+			t.Fatalf("accountStatus: %v", err)
+		}
+		if status.AccountTypeID != "premium" || status.SubscriptionName != "Pro" {
+			t.Fatalf("status = %+v", status)
+		}
+	})
+
+	t.Run("error path 500", func(t *testing.T) {
+		routes := map[string]mockRoute{
+			"GET /api/f/user-session":   {Status: 200, Body: []byte(`{"authorized":true,"secondsBlocked":0}`)},
+			"GET /api/f/account-status": {Status: 500, Body: []byte(`{"apiError":"internal"}`)},
+		}
+		srv := newMockServer(t, jsonHandler(t, routes))
+		a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+		_ = a.store.Save(context.Background(), &Session{Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "sess-x"}}})
+		_, err := a.accountStatus(context.Background())
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.HTTPStatus != 500 {
+			t.Fatalf("erwartet *APIError HTTP 500, bekommen %v", err)
+		}
+	})
+
+	t.Run("network error", func(t *testing.T) {
+		a := &authClient{
+			hc:      &http.Client{Timeout: 50 * time.Millisecond},
+			baseURL: "http://127.0.0.1:1",
+			creds:   Credentials{Username: "test@example.invalid", Password: "test-pw"},
+			store:   NewFileSessionStore(filepath.Join(t.TempDir(), "session.json")),
+		}
+		_, err := a.accountStatus(context.Background())
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+	})
+}

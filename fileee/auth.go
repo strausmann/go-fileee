@@ -196,3 +196,163 @@ func (a *authClient) login(ctx context.Context) error {
 		return parseAPIError(loginResp.StatusCode, loginBody)
 	}
 }
+
+// userSessionWire ist die Wire-Form von GET /api/f/user-session (API.md §2.8, ADR-0005): eine
+// leichte Authorized-Probe für eine bereits gespeicherte Session, inklusive Blocked-Zähler.
+type userSessionWire struct {
+	Authorized     bool    `json:"authorized"`
+	SecondsBlocked float64 `json:"secondsBlocked"`
+}
+
+func (a *authClient) userSession(ctx context.Context) (*userSessionWire, error) {
+	req, err := http.NewRequestWithContext(withSkipReauth(ctx), http.MethodGet, a.baseURL+"/api/f/user-session", nil)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: user-session request: %w", err)
+	}
+	resp, err := a.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: user-session: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: user-session read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseAPIError(resp.StatusCode, body)
+	}
+	var w userSessionWire
+	if err := json.Unmarshal(body, &w); err != nil {
+		return nil, fmt.Errorf("fileee: user-session decode: %w", err)
+	}
+	return &w, nil
+}
+
+// EnsureSession stellt sicher, dass eine gültige Session existiert (Umbrella-Spec §3.2):
+// 1. gespeicherte Session laden, 2. per user-session prüfen, 3. bei ungültig/fehlend
+// reauthentifizieren.
+func (a *authClient) EnsureSession(ctx context.Context) error {
+	sess, err := a.store.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("fileee: session store load: %w", err)
+	}
+	if sess != nil && len(sess.Cookies) > 0 {
+		loadCookiesIntoJar(a.hc.Jar, a.baseURL, sess.Cookies)
+		if us, err := a.userSession(ctx); err == nil && us.Authorized {
+			if us.SecondsBlocked > 0 {
+				return &BlockedError{SecondsBlocked: int(us.SecondsBlocked)}
+			}
+			return nil
+		}
+	}
+	return a.reauthenticate(ctx)
+}
+
+// tokenLogin ist der bevorzugte headless-Re-Auth-Pfad über das rememberMe-JWT-Cookie
+// (API.md §2.6, LIVE bestätigt part4).
+func (a *authClient) tokenLogin(ctx context.Context) error {
+	ctx = withSkipReauth(ctx)
+	token := a.cookieValue("rememberMe")
+	if token == "" {
+		return ErrSessionExpired
+	}
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/api/f/token/login", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("fileee: token/login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := a.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("fileee: token/login: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return parseAPIError(resp.StatusCode, body)
+	}
+	return a.persistSession(ctx)
+}
+
+// reauthenticate implementiert §4.5 der Umbrella-Spec: zuerst token/login (rememberMe), bei
+// Fehlschlag voller Passwort+TOTP-Login. Schlägt auch das fehl -> ErrSessionExpired.
+func (a *authClient) reauthenticate(ctx context.Context) error {
+	if err := a.tokenLogin(ctx); err == nil {
+		return nil
+	}
+	if err := a.login(ctx); err != nil {
+		return ErrSessionExpired
+	}
+	return nil
+}
+
+// logout meldet die aktuelle Session serverseitig ab und leert den lokalen SessionStore
+// (API.md §2.7) — ein anschließendes EnsureSession führt damit zwingend einen vollen
+// Reauth-Zyklus durch.
+func (a *authClient) logout(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(withSkipReauth(ctx), http.MethodPost, a.baseURL+"/api/f/logout", nil)
+	if err != nil {
+		return fmt.Errorf("fileee: logout request: %w", err)
+	}
+	resp, err := a.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("fileee: logout: %w", err)
+	}
+	defer resp.Body.Close()
+	return a.store.Save(ctx, &Session{})
+}
+
+// accountStatusWire ist die Wire-Form von GET /api/f/account-status (API.md §2.9). toDomain()
+// übersetzt in die öffentliche AccountStatus-Form (types.go).
+type accountStatusWire struct {
+	AccountTypeID       string `json:"accountTypeId"`
+	CurrentSubscription struct {
+		Name      string  `json:"name"`
+		Frequency string  `json:"frequency"`
+		Amount    float64 `json:"amount"`
+	} `json:"currentSubscription"`
+	PayedUntil        string `json:"payedUntil"`
+	NextLicenseRefill string `json:"nextLicenseRefill"`
+	Problem           string `json:"problem"`
+}
+
+func (w accountStatusWire) toDomain() *AccountStatus {
+	return &AccountStatus{
+		AccountTypeID:      w.AccountTypeID,
+		SubscriptionName:   w.CurrentSubscription.Name,
+		SubscriptionFreq:   w.CurrentSubscription.Frequency,
+		SubscriptionAmount: w.CurrentSubscription.Amount,
+		PayedUntil:         decodeTimeValue(json.RawMessage(`"` + w.PayedUntil + `"`)),
+		NextLicenseRefill:  decodeTimeValue(json.RawMessage(`"` + w.NextLicenseRefill + `"`)),
+		Problem:            w.Problem,
+	}
+}
+
+// accountStatus liefert Konto-/Abo-Informationen (API.md §2.9). Ruft zuerst EnsureSession auf,
+// damit der Aufrufer nicht selbst um eine gültige Session kümmern muss.
+func (a *authClient) accountStatus(ctx context.Context) (*AccountStatus, error) {
+	if err := a.EnsureSession(ctx); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL+"/api/f/account-status", nil)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: account-status request: %w", err)
+	}
+	resp, err := a.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: account-status: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: account-status read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseAPIError(resp.StatusCode, body)
+	}
+	var w accountStatusWire
+	if err := json.Unmarshal(body, &w); err != nil {
+		return nil, fmt.Errorf("fileee: account-status decode: %w", err)
+	}
+	return w.toDomain(), nil
+}
