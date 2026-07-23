@@ -306,6 +306,13 @@ Objekte/Versionen) und liefert:
 `localResults` pollen; `rows` upserten, `idsToDelete` entfernen. Voll-Export = `query` mit
 `start`/`limit` durchblättern.
 
+**Live-verifiziert (2026-07-23, §9.1):** `criteria`/`sortOrder` werden in echten Request-Bodies
+immer als **leere Arrays `[]`** gesendet (nicht `null`/weggelassen), auch wenn kein Filter/keine
+Sortierung gebraucht wird — die Lib sollte defensiv immer `[]` statt `nil`/`null` serialisieren.
+Die **`localResults`-Delta-Wirkung** ließ sich im Testkonto (kleine Datenmenge) nicht eindeutig von
+einem Voll-Snapshot unterscheiden — die Lib behandelt ein unklares `diff`-Ergebnis deshalb
+**fail-safe als Voll-Snapshot** statt sich auf einen unbestätigten Delta-Mechanismus zu verlassen.
+
 **Generische Variante:** `POST /api/:id/rest/query` und `POST /api/:id/rest/diff` existieren als
 generischer Einstieg (`:id` = Ressourcen-Key). ⚠️ verifizieren, welche Ressourcen so adressierbar
 sind (vermutlich alle Sync-fähigen Ressourcen aus §4).
@@ -391,7 +398,9 @@ Siehe §3. `rows[]` je Dokument:
 #### `GET /api/documents/rest/:id` — Einzeldokument
 
 Volles Objekt inkl. erweitertem `attributes.data`. `404` + `apiError`/`errorCode`/`errorMessage`
-bei unbekannter ID.
+bei unbekannter ID. **`errorCode` kann als JSON-Zahl kommen** (nicht nur als String) — Live-Verifikation
+2026-07-23, §9.1. IDs (`id`, `companyId`, …) sind durchgängig 24-stellige Hex-Strings im
+MongoDB-`ObjectId`-Format, keine UUIDs.
 
 #### `PUT /api/documents/rest/:id` — Dokument ändern
 
@@ -400,14 +409,16 @@ Body = vollständiges Dokumentobjekt (`attributes`, `pages`, `status`, `uploadAt
 ist Design-Intention (client-seitiger Auto-Retry bei fehlgeschlagenem Update, siehe §1) — der
 exakte Server-Fehlercode bei Versionskonflikt ist ⚠️ nicht code-sichtbar (§9).
 
-#### `DELETE /api/documents/rest/:id` (NEU, code-belegt)
+#### `DELETE /api/documents/rest/:id` — **LIVE bestätigt (2026-07-23, §9.1): `204`**
 
-Hartes Löschen. Im Live-Traffic **nie beobachtet** (die Web-UI nutzt für Dokumente einen
-Soft-Delete/Trash-Flow über §4.2), aber im Core-SDK real verdrahtet: die Dokument-API-Klasse erbt
-`deleteById()` von der generischen REST-Basisklasse, die `baseUrl = "documents/rest"` und
-HTTP-Methode `DELETE` setzt. Vorsicht: unklar, ob dieser Pfad in der Praxis vom Server überhaupt
-für bereits nicht-gelöschte Dokumente akzeptiert wird oder nur intern für Aufräumzwecke existiert
-— vor produktivem Einsatz gegen ein Test-Konto verifizieren.
+Hartes Löschen. Im ursprünglichen Live-Traffic **nie beobachtet** (die Web-UI nutzt für Dokumente
+einen Soft-Delete/Trash-Flow über §4.2), aber im Core-SDK real verdrahtet: die Dokument-API-Klasse
+erbt `deleteById()` von der generischen REST-Basisklasse, die `baseUrl = "documents/rest"` und
+HTTP-Methode `DELETE` setzt. **Gezielter Live-Test gegen das Test-Konto bestätigt: der Endpunkt
+akzeptiert das harte Löschen eines nicht-gelöschten Dokuments und antwortet mit `204`** — der
+Vorbehalt „nur intern für Aufräumzwecke" ist damit ausgeräumt. Für normale Lösch-Flows (näher an
+dem, was die Web-UI tut) bleibt der Papierkorb-Pfad (§4.2) die empfohlene Wahl; das harte `DELETE`
+ist für Lib-Konsumenten nutzbar, die endgültiges Löschen ohne Papierkorb-Umweg brauchen.
 
 #### `POST /api/documents/rest` — Dokument anlegen (**Upload**, vollständig geklärt)
 
@@ -471,6 +482,23 @@ let uiStatus = response.data.id !== uploadItem.uploadId ? "Duplicate" : "Success
 
 → Für `go-fileee`: nach jedem Upload die zurückgegebene `id` mit der gesendeten vergleichen, um
 Duplikate zu erkennen, statt sich blind auf die eigene `id` zu verlassen.
+
+#### Auto-Klassifizierung & Upload-Lebenszyklus — LIVE bestätigt (2026-07-23, §9.1)
+
+Nach dem Upload läuft die Analyse **asynchron**: `status` durchläuft
+`NEW → ANALYSING → CLASSIFIED` (§6.1) — im Test mit einer Fake-Rechnung (`RE-2026-0042`, Test-IBAN
+`DE02120300000000202051`, Betrag `148.75 EUR`) dauerte es **~22 Sekunden** bis `CLASSIFIED`
+erreicht war. Fileee klassifiziert hochgeladene Dokumente **automatisch**: die Test-Rechnung erhielt
+`attributes.data.documentTypeId.value = "bill"` und folgende Felder wurden automatisch extrahiert:
+`invoiceId`, `invoiceDate`, `amount`, `senderId`, `customerId`, `bankAccount1.iban`,
+`paymentReference`, `title`. **`invoiceDueDate` wurde NICHT automatisch extrahiert** — dieses Feld
+bleibt auch bei einer klar erkannten Rechnung leer und muss ggf. manuell/nachgelagert gesetzt
+werden.
+
+→ Für `go-fileee`: nach einem Upload nicht sofort `attributes.data` als final annehmen — auf
+`status == CLASSIFIED` (oder mindestens `ANALYSING`, siehe §6.1) pollen/warten, bevor
+Auto-extrahierte Felder ausgewertet werden. `invoiceDueDate` bleibt typischerweise leer und sollte
+nicht als „Klassifizierung fehlgeschlagen" fehlinterpretiert werden.
 
 #### `POST /api/documents/rest/:id/revision-lock` (NEU) — gesetzliche Aufbewahrungssperre
 
@@ -669,15 +697,22 @@ Persönliche Kontakte (mit Adresse). **Vollständige Pflege via CRUD:**
 
 Body-Felder: `id`, `companyId`, `companyName`, `email`, `phoneNumber`, `url`, `address`,
 `contactType`, `contactStatus`, `connectedToOtherUser`, `fromUserDb`, `documentCounter`,
-`deleted`, `version`.
+`deleted`, `version`, **`firstName`, `lastName`**.
 
-⚠️ `firstName`/`lastName` erscheinen im GET, nicht im beobachteten POST-Body — beim Anlegen ggf.
-in `address`/separat. Live verifizieren (§9).
+**GEKLÄRT (Live-Verifikation 2026-07-23, §9.1):** `firstName`/`lastName` werden im `POST`-Body
+akzeptiert — die frühere Unklarheit ist behoben. Mehrere der oben genannten Felder sind dabei
+**Pflichtfelder**, nicht optional: `contactStatus`, `connectedToOtherUser`, `fromUserDb`,
+`documentCounter`, `deleted`, `version` müssen mitgeschickt werden, sonst schlägt das Anlegen fehl.
 
 #### `PUT /api/contacts/rest/:id` — Kontakt ändern
 
 ⚠️ im HAR nicht direkt beobachtet, Muster gilt analog zu Dokumenten (generische
 `PUT .../rest/:id`-Konvention, §1).
+
+#### `DELETE /api/contacts/rest/:id` (NEU) — **LIVE bestätigt (2026-07-23, §9.1): `204`**
+
+Hartes Löschen eines Kontakts, analog zu `DELETE /api/documents/rest/:id` (§4.1). Live gegen das
+Test-Konto verifiziert: Antwort `204`.
 
 ### 4.7 Document-Types & Document-Type-Schemes → Paperless-**Document-Types** + **Custom-Fields**
 
@@ -708,6 +743,11 @@ in `address`/separat. Live verifizieren (§9).
 → `schemaDefinition` + `i18nDictionary` sind die direkte Vorlage für **Paperless Custom-Fields**.
 Das vollständige `i18nDictionary`-Typ-Universum jenseits der belegten Beispielfelder bleibt offen
 (§9) — Schema-Definitionen sind serverseitig dynamisch, nicht im Frontend-Code hartkodiert.
+
+**LIVE bestätigt (2026-07-23, §9.1):** Neben `query` liefert auch **`POST /api/document-types/rest/diff`**
+bzw. **`POST /api/document-type-schemes/rest/diff`** direkt `200` — die generische
+`diff`-Konvention (§1) gilt für diese beiden Ressourcen genau wie für alle anderen Sync-fähigen
+Ressourcen, nicht nur `query`.
 
 ### 4.8 Weitere Sync-Ressourcen (gleiches `diff`-/`query`-Muster)
 
@@ -747,11 +787,19 @@ Jeder Wert in `attributes.data` ist ein **typisierter Wrapper**, nicht der nackt
 - **Enum-Attribut** (z. B. `autoProcessingStatus`): `{ value, enumClassName, modified, type }`
   (statt `source`).
 - **Gruppen-Attribut** (z. B. `amount`, `bankAccount1`): `{ attributeGroup, data: {...}, modified,
-  source, type }` — `data` trägt **rekursiv** dieselbe Wrapper-Struktur (`amount.data` =
-  `{currency, value}`, `bankAccount1.data` = `{iban, bic, bank, account_holder}`).
+  source, type }` — **KORRIGIERT (Live-Verifikation 2026-07-23, §9.1):** `data` trägt **nicht**
+  die nackten Unterwerte, sondern jedes Unterfeld ist selbst wieder ein vollständiger
+  `{ value, modified, source, type }`-Wrapper (rekursive Wrapper-Struktur, kein flaches Objekt).
+  Also `amount.data = { currency: {value, modified, source, type}, value: {value, modified,
+  source, type} }` und `bankAccount1.data = { iban: {...}, bic: {...}, bank: {...},
+  account_holder: {...} }` — jeweils vier vollwertige Wrapper, nicht vier rohe Strings.
+- **Datumsformat (Live-Verifikation 2026-07-23, §9.1):** DATE-typisierte einfache Attribute
+  (`invoiceDate`, `issueDate`) liefern `value` als **nacktes Datum** `"2026-07-15"` — kein
+  RFC3339-Zeitstempel mit Uhrzeit/Zeitzone. Die Lib parst defensiv beide Formen.
 
 Für `go-fileee`: ein generischer `Attribute<T>`-Wrapper mit `Value/Source/Modified/Type` (+
-`ContainedType`/`EnumClassName`/`AttributeGroup` je Variante).
+`ContainedType`/`EnumClassName`/`AttributeGroup` je Variante). Gruppen-Unterfelder entpackt die Lib
+rekursiv über einen `unwrapNestedValue`-Helper — kein flaches `map[string]any`.
 
 Beobachtete Schlüssel:
 
@@ -980,9 +1028,29 @@ oder Code) und muss vor der Implementierung **nicht** erneut recherchiert werden
 obigen Punkte erfolgt kontrolliert gegen das eigene (Test-)Konto — read-only, keine destruktiven
 Tests.
 
+### 9.1 Zweite Live-Verifikationsrunde (2026-07-23, Fake-Testdaten gegen eigenes Test-Konto)
+
+Ergänzend zur Browser-Cookie-Session (§2.11) wurde ein zweiter kontrollierter Live-Test gegen das
+eigene Test-Konto gefahren — Upload einer Fake-Rechnung (`RE-2026-0042`, Test-IBAN
+`DE02120300000000202051`, Betrag `148.75 EUR`), eine Contact-Anlage und gezielte Lösch-Tests. Alle
+Werte sind Fake-Testdaten — keine echten Dokumente/Kontakte. Ergebnisse:
+
+| # | Punkt | Ergebnis |
+|---|---|---|
+| 1 | Gruppen-Attribute (`amount`, `bankAccount1`) | **KORREKTUR:** jedes Unterfeld in `data` ist selbst ein `{value,modified,source,type}`-Wrapper, kein roher Wert — siehe korrigiertes §5 |
+| 2 | Datumsformat (`invoiceDate`/`issueDate`) | Bare Date `"2026-07-15"`, kein RFC3339 |
+| 3 | Auto-Klassifizierung | Fake-Rechnung erhielt `documentTypeId="bill"` und extrahierte automatisch `invoiceId`, `invoiceDate`, `amount`, `senderId`, `customerId`, `bankAccount1.iban`, `paymentReference`, `title`. `invoiceDueDate` wurde **nicht** automatisch extrahiert |
+| 4 | Upload-Lebenszyklus | `status` durchläuft nach Upload asynchron `NEW → ANALYSING → CLASSIFIED` (~22 s bis `CLASSIFIED` im Test) |
+| 5 | Hard-DELETE | **Bestätigt:** `DELETE /api/documents/rest/:id` → `204`, ebenso `DELETE /api/contacts/rest/:id` → `204` (NEU dokumentiert, §4.6) |
+| 6 | Contact-Create (`firstName`/`lastName`) | Werden im `POST`-Body akzeptiert (zuvor ⚠️ offen). Zusätzlich mehrere Pflichtfelder nötig: `contactStatus`, `connectedToOtherUser`, `fromUserDb`, `documentCounter`, `deleted`, `version` |
+| 7 | `errorCode` / ID-Format | `errorCode` kann als JSON-**Zahl** kommen (nicht nur String). IDs (`id`, `companyId`, …) sind 24-stellige Hex-Strings im MongoDB-`ObjectId`-Format, keine UUIDs |
+| 8 | `diff`-Body-Felder | `criteria`/`sortOrder` werden live immer als **leere Arrays `[]`** gesendet (nicht `null`/weggelassen), auch ohne Filter |
+| 9 | `localResults`-Delta-Wirkung | Im Testkonto nicht bestätigt — die Lib verhält sich **fail-safe** und behandelt ein unklares Diff-Ergebnis als Voll-Snapshot statt sich auf einen unbestätigten Delta-Mechanismus zu verlassen |
+| 10 | `document-types`/`document-type-schemes` `diff` | `POST .../rest/diff` liefert für beide Ressourcen direkt `200` (analog zu `query`) |
+
 ---
 
-## Anhang: Vollständige Endpunkt-Liste (56)
+## Anhang: Vollständige Endpunkt-Liste (57)
 
 ```
 # Auth / Session (10)
@@ -1040,10 +1108,11 @@ GET    /api/v1/companies/:id/logo/HD             Firmen-Logo
 POST   /api/companies/rest/:id/main-contact      Haupt-Ansprechpartner setzen
 DELETE /api/companies/:id/logo                   Logo loeschen (auch /api/:id/logo Profil-Variante)
 
-# Contacts (3)
+# Contacts (4)
 POST   /api/contacts/rest                        Kontakt anlegen
 GET    /api/contacts/rest/:id                    Kontakt
 PUT    /api/contacts/rest/:id                    Kontakt aendern (Muster analog Dokumente)
+DELETE /api/contacts/rest/:id                    Hart loeschen (LIVE bestaetigt: 204)
 
 # Document-Types & Schemes (2)
 POST   /api/document-types/rest/query            Dokumenttyp-Werte
@@ -1067,8 +1136,8 @@ POST   /api/:id/rest/diff                        generischer Diff
 ```
 
 **Zählung:** 10 (Auth) + 16 (Dokumente) + 3 (Papierkorb) + 3 (Fileee-Boxes) + 2 (Sharing) +
-2 (Tags) + 5 (Companies) + 3 (Contacts) + 2 (Document-Types) + 7 (Weitere) + 1 (Push) +
-2 (Generisch) = **56 Endpunkte**.
+2 (Tags) + 5 (Companies) + 4 (Contacts) + 2 (Document-Types) + 7 (Weitere) + 1 (Push) +
+2 (Generisch) = **57 Endpunkte**.
 
 ---
 
