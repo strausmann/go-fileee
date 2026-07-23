@@ -2,7 +2,9 @@ package fileee
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"sort"
 )
 
 // jsonRawRow ist ein sprechender Alias für json.RawMessage, verwendet in queryResultWire (dieser
@@ -134,4 +136,103 @@ func (o QueryOptions) toWire() queryRequestWire {
 		})
 	}
 	return w
+}
+
+// Cursor hält den Sync-Zustand EINER Entity-Art (Umbrella-Spec §5.1). Der Aufrufer
+// erzeugt/speichert/übergibt Cursor-Werte — die Lib mutiert sie nur innerhalb eines
+// Diff()-Aufrufs (über eine Kopie, siehe Clone) und gibt das Ergebnis zurück.
+type Cursor struct {
+	EntityType string
+	Known      map[string]int64
+}
+
+func NewCursor(entityType string) Cursor {
+	return Cursor{EntityType: entityType, Known: map[string]int64{}}
+}
+
+func (c Cursor) Clone() Cursor {
+	known := make(map[string]int64, len(c.Known))
+	for k, v := range c.Known {
+		known[k] = v
+	}
+	return Cursor{EntityType: c.EntityType, Known: known}
+}
+
+type DiffResult[T any] struct {
+	Rows       []T
+	DeletedIDs []string
+	TotalRows  int
+	NextCursor Cursor
+}
+
+type localResultWire struct {
+	ID      string `json:"id"`
+	Version int64  `json:"version"`
+}
+
+type diffRequestWire struct {
+	Criteria     []criterionWire   `json:"criteria"`
+	SortOrder    []sortOrderWire   `json:"sortOrder"`
+	Limit        int               `json:"limit"`
+	Start        int               `json:"start"`
+	LocalResults []localResultWire `json:"localResults"`
+}
+
+type diffWire struct {
+	Rows        []jsonRawRow `json:"rows"`
+	IdsToDelete []string     `json:"idsToDelete"`
+	TotalRows   int          `json:"totalRows"`
+}
+
+type idVersionWire struct {
+	ID      string `json:"id"`
+	Version int64  `json:"version"`
+}
+
+// buildLocalResults baut den Request-Body-Teil localResults aus cursor.Known (Umbrella-Spec §5.2,
+// angenommene Wire-Form — siehe Umbrella-Spec §10.3 Punkt C: fail-safe, ein unerwartetes Format
+// führt schlimmstenfalls zu einem Voll-Snapshot statt Delta, kein Datenverlust). Deterministisch
+// sortiert nach ID für reproduzierbare Requests/Tests.
+func buildLocalResults(c Cursor) []localResultWire {
+	out := make([]localResultWire, 0, len(c.Known))
+	for id, v := range c.Known {
+		out = append(out, localResultWire{ID: id, Version: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// decodeDiff dekodiert eine diffWire-Antwort generisch in ein DiffResult[T] und berechnet
+// NextCursor gemäß §5.2: jede Zeile -> Known[id]=version, idsToDelete entfernt Einträge. T wird
+// sowohl in die typisierten Rows als auch (separat, über idVersionWire) für die Cursor-Merge-Logik
+// dekodiert, damit die Merge-Logik unabhängig vom konkreten Zeilentyp bleibt.
+func decodeDiff[T any](body []byte, cursor Cursor) (*DiffResult[T], error) {
+	var w diffWire
+	if err := json.Unmarshal(body, &w); err != nil {
+		return nil, fmt.Errorf("fileee: diff response decode: %w", err)
+	}
+	rows := make([]T, 0, len(w.Rows))
+	next := cursor.Clone()
+	for _, raw := range w.Rows {
+		var row T
+		if err := json.Unmarshal(raw, &row); err != nil {
+			return nil, fmt.Errorf("fileee: diff row decode: %w", err)
+		}
+		rows = append(rows, row)
+
+		var iv idVersionWire
+		if err := json.Unmarshal(raw, &iv); err != nil {
+			return nil, fmt.Errorf("fileee: diff row id/version decode: %w", err)
+		}
+		next.Known[iv.ID] = iv.Version
+	}
+	for _, id := range w.IdsToDelete {
+		delete(next.Known, id)
+	}
+	return &DiffResult[T]{
+		Rows:       rows,
+		DeletedIDs: w.IdsToDelete,
+		TotalRows:  w.TotalRows,
+		NextCursor: next,
+	}, nil
 }
