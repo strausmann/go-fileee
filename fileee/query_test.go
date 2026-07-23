@@ -153,3 +153,47 @@ func TestDecodeDiffKaputtesJSON(t *testing.T) {
 		t.Fatalf("erwartet Fehler bei kaputtem JSON, bekommen nil")
 	}
 }
+
+// TestDecodeDiffDocumentBatchToleriertStringVersionInEinerZeile ist die Batch-Level-Regression aus
+// dem finalen Whole-Branch-Review: EINE Dokumentzeile mit einem Page-imageVersion als JSON-String
+// (openapi.json: DocumentPage.imageVersion = ["string","integer"]) durfte den kompletten
+// Query/Diff-Batch NICHT abbrechen. Vor dem Fix ließ das reine int64-Feld encoding/json bei dieser
+// einen Zeile mit einem Typfehler abbrechen — decodeDiff[Document] gab dann gar keine Dokumente
+// zurück, obwohl nur eine von zwei Zeilen betroffen war. Nach dem Fix müssen BEIDE Dokumente
+// vollständig dekodiert im Ergebnis auftauchen.
+func TestDecodeDiffDocumentBatchToleriertStringVersionInEinerZeile(t *testing.T) {
+	body := []byte(`{
+		"rows": [
+			{
+				"id": "doc-1", "version": 1, "created": "2026-01-01T00:00:00Z", "modified": "2026-01-01T00:00:00Z",
+				"deleted": false, "status": "DONE", "type": "Document",
+				"pages": [{"id": "page-1", "imageVersion": "5", "contentVersion": "5"}],
+				"attributes": {"data": {}}, "uploadAttribute": {}, "sharedSpaceIds": [], "forbiddenActions": []
+			},
+			{
+				"id": "doc-2", "version": 1, "created": "2026-01-02T00:00:00Z", "modified": "2026-01-02T00:00:00Z",
+				"deleted": false, "status": "DONE", "type": "Document",
+				"pages": [{"id": "page-2", "imageVersion": 7, "contentVersion": 3}],
+				"attributes": {"data": {}}, "uploadAttribute": {}, "sharedSpaceIds": [], "forbiddenActions": []
+			}
+		],
+		"idsToDelete": [],
+		"totalRows": 2
+	}`)
+	result, err := decodeDiff[Document](body, NewCursor("Document"))
+	if err != nil {
+		t.Fatalf("decodeDiff[Document]: %v (der gesamte Batch wäre vor dem Fix an EINER Zeile mit String-Version abgebrochen)", err)
+	}
+	if len(result.Rows) != 2 {
+		t.Fatalf("erwartet 2 Dokumente im Batch, bekommen %d: %+v", len(result.Rows), result.Rows)
+	}
+	if result.Rows[0].ID != "doc-1" || int64(result.Rows[0].Pages[0].ImageVersion) != 5 {
+		t.Errorf("doc-1 falsch dekodiert: %+v", result.Rows[0])
+	}
+	if result.Rows[1].ID != "doc-2" || int64(result.Rows[1].Pages[0].ImageVersion) != 7 {
+		t.Errorf("doc-2 falsch dekodiert: %+v", result.Rows[1])
+	}
+	if result.NextCursor.Known["doc-1"] != 1 || result.NextCursor.Known["doc-2"] != 1 {
+		t.Errorf("NextCursor nach Batch falsch: %+v", result.NextCursor.Known)
+	}
+}

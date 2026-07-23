@@ -3,6 +3,7 @@ package fileee
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -171,10 +172,56 @@ func (d Document) MarshalJSON() ([]byte, error) {
 // Page ist eine einzelne Dokumentseite (API.md §4.1) — imageVersion/contentVersion steuern den
 // Bild-Download und müssen IMMER frisch aus dem zuletzt geladenen pages[]-Array kommen, nicht
 // gecacht werden (Skill-Troubleshooting "Seiten-Bild fehlt oder ist falsch aufgelöst").
+//
+// ImageVersion/ContentVersion sind bewusst flexInt64 statt int64: openapi.json deklariert
+// DocumentPage.imageVersion/contentVersion als ["string","integer"] (Wire liefert BEIDE
+// Varianten). Ein reiner int64-Feldtyp lässt encoding/json bei einer JSON-String-Zeile mit einem
+// Typfehler abbrechen — bei restService.Query/Diff (service.go) reißt das den KOMPLETTEN Batch
+// mit, nicht nur die eine betroffene Zeile (Whole-Branch-Review-Finding, Export-Abbruch-Bug).
 type Page struct {
-	ID             string `json:"id"`
-	ImageVersion   int64  `json:"imageVersion"`
-	ContentVersion int64  `json:"contentVersion"`
+	ID             string    `json:"id"`
+	ImageVersion   flexInt64 `json:"imageVersion"`
+	ContentVersion flexInt64 `json:"contentVersion"`
+}
+
+// flexInt64 dekodiert einen Ganzzahlwert, der im Wire-Format als JSON-Zahl ODER als JSON-String
+// kommen kann (openapi.json DocumentPage: imageVersion/contentVersion = ["string","integer"]).
+// Ein leerer String dekodiert defensiv zu 0 (ADR-0003: reverse-engineertes API liefert nicht immer
+// den erwarteten Wert) statt einen Fehler zu werfen — jeder andere, nicht-numerische String bleibt
+// ein Fehler, damit echter Datenmüll nicht still verschluckt wird.
+type flexInt64 int64
+
+func (v *flexInt64) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*v = 0
+		return nil
+	}
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return fmt.Errorf("fileee: flexInt64 string decode: %w", err)
+		}
+		if s == "" {
+			*v = 0
+			return nil
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return fmt.Errorf("fileee: flexInt64 string parse %q: %w", s, err)
+		}
+		*v = flexInt64(n)
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return fmt.Errorf("fileee: flexInt64 number decode: %w", err)
+	}
+	*v = flexInt64(n)
+	return nil
+}
+
+func (v flexInt64) MarshalJSON() ([]byte, error) {
+	return json.Marshal(int64(v))
 }
 
 // rawAttribute deckt alle vier Attribute-Varianten aus API.md §5 strukturell ab (Feldnamen sind

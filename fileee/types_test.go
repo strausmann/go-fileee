@@ -316,3 +316,69 @@ func TestCompanyAttributesUnmarshalListenFelder(t *testing.T) {
 		t.Fatalf("RawExtra fehlt 'bonusPoints'")
 	}
 }
+
+// TestPageImageVersionUndContentVersionAkzeptierenStringOderZahl deckt den im finalen
+// Whole-Branch-Review gefundenen Export-Abbruch-Bug ab: openapi.json deklariert
+// DocumentPage.imageVersion/contentVersion als ["string","integer"] — ein reiner int64-Feldtyp
+// lässt encoding/json bei einem JSON-String-Wert mit einem Typfehler abbrechen. flexInt64 muss
+// beide Varianten dekodieren, inklusive des leeren Strings ("" -> 0).
+func TestPageImageVersionUndContentVersionAkzeptierenStringOderZahl(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want int64
+	}{
+		{"Zahl", `{"id":"page-1","imageVersion":5,"contentVersion":5}`, 5},
+		{"String", `{"id":"page-1","imageVersion":"5","contentVersion":"5"}`, 5},
+		{"LeererString", `{"id":"page-1","imageVersion":"","contentVersion":""}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var p Page
+			if err := json.Unmarshal([]byte(tc.raw), &p); err != nil {
+				t.Fatalf("Unmarshal(%s): %v", tc.raw, err)
+			}
+			if int64(p.ImageVersion) != tc.want {
+				t.Errorf("ImageVersion = %d, erwartet %d", int64(p.ImageVersion), tc.want)
+			}
+			if int64(p.ContentVersion) != tc.want {
+				t.Errorf("ContentVersion = %d, erwartet %d", int64(p.ContentVersion), tc.want)
+			}
+		})
+	}
+}
+
+// TestPageImageVersionUngueltigerStringLiefertFehler stellt sicher, dass ein nicht-numerischer
+// String (weder Ganzzahl noch Leerstring) weiterhin einen Fehler liefert statt still 0 zu
+// dekodieren — defensiv nur für den belegten Leerstring-Fall, nicht für beliebigen Datenmüll.
+func TestPageImageVersionUngueltigerStringLiefertFehler(t *testing.T) {
+	var p Page
+	err := json.Unmarshal([]byte(`{"id":"page-1","imageVersion":"nicht-numerisch","contentVersion":1}`), &p)
+	if err == nil {
+		t.Fatalf("erwartet Fehler bei nicht-numerischem imageVersion-String, bekommen nil")
+	}
+}
+
+// TestPageMarshalEmittiertZahl stellt sicher, dass ein zuvor aus einem JSON-String dekodierter
+// Wert beim erneuten Marshal wieder als reine JSON-Zahl herauskommt (Round-Trip bleibt numerisch,
+// kein Zurückschreiben als String).
+func TestPageMarshalEmittiertZahl(t *testing.T) {
+	var p Page
+	if err := json.Unmarshal([]byte(`{"id":"page-1","imageVersion":"7","contentVersion":"3"}`), &p); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("Re-Unmarshal in map: %v", err)
+	}
+	if _, isString := decoded["imageVersion"].(string); isString {
+		t.Fatalf("imageVersion wurde als JSON-String re-emittiert, erwartet Zahl: %s", out)
+	}
+	if got, ok := decoded["imageVersion"].(float64); !ok || got != 7 {
+		t.Fatalf("imageVersion nach Round-Trip = %v, erwartet Zahl 7", decoded["imageVersion"])
+	}
+}
