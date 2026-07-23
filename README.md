@@ -6,49 +6,58 @@ Eine **inoffizielle** Go-Client-Library für das **interne** Web-App-API von [Fi
 
 ## Warum
 
-`go-fileee` ist der Kern-Baustein für die Migration von Fileee zu [Paperless-ngx](https://docs.paperless-ngx.com/) und für weitergehende Automatisierung rund um archivierte Dokumente. Statt Dokumente manuell zu exportieren, kapselt die Library Login (inkl. TOTP-2FA), Dokument-Sync, Download und Upload programmatisch.
+`go-fileee` ist ein **neutraler, allgemeiner** Go-Client für das Fileee-API: er kapselt Login (inkl. TOTP-2FA), Dokument-Sync, Download und Upload programmatisch — ohne Bindung an ein bestimmtes Ziel- oder Fremdsystem. Damit lässt sich Fileee für viele Zwecke automatisieren:
 
-## Die drei Konsumenten
+- **Export** von Dokumenten und Stammdaten (Tags, Firmen, Kontakte, Dokumenttypen),
+- **Backup/Archivierung** in ein dauerhaftes Disk-Archiv,
+- allgemeine **Automatisierung** rund um Fileee-Inhalte,
+- **MCP-/AI-Zugriff** auf die eigenen Dokumente,
+- **Scanner-Upload** neuer Dokumente nach Fileee,
+- **Migration zu einem beliebigen DMS** (z. B. Paperless-ngx) — als **externes** Consumer-Projekt.
+
+> Domänen-/zielsystem-spezifische Integrationen (z. B. eine Paperless-Migration) leben in separaten Consumer-Projekten, die go-fileee importieren. Dieses Repo bleibt bewusst **domänen-neutral** (siehe [ADR-0006](docs/adr/0006-domaenen-neutralitaet.md)).
+
+## Komponenten
 
 ```mermaid
 graph TD
-    A["fileee/ (Core-Lib)"] --> B["cmd/fileee (CLI)"]
+    A["fileee/ (Core-Lib)"] --> B["cmd/fileee (generische CLI)"]
     A --> C["cmd/fileee-mcp (MCP-Server)"]
-    A --> D["Scanner-Projekt (extern)"]
-    B --> E["Paperless-ngx Migration + Sync"]
+    A --> D["externe Consumer-Projekte"]
+    B --> E["export / sync / download / upload → Disk-Archiv"]
     C --> F["AI-Zugriff (Claude Code / ChatGPT)"]
-    D --> G["Scanner-Upload nach Fileee"]
+    D --> G["z. B. Paperless-Migration, Scanner-Upload"]
 ```
 
-| Modul | Zweck |
+| Komponente | Zweck |
 |-------|-------|
-| **A: Core-Lib** (`fileee/`) | Auth (Session-Cookie + TOTP), Entities, Download, Upload. Zustandslos — der Aufrufer hält den Sync-Cursor. |
-| **B: CLI** (`cmd/fileee`) | Export → dauerhaftes Disk-Archiv → Migration nach Paperless-ngx + inkrementeller Sync. Paperless-spezifisches Wissen lebt **ausschließlich** hier (`internal/paperless`), nie in der Core-Lib. |
-| **C: MCP-Server** (`cmd/fileee-mcp`) | Stellt Fileee-Inhalte für AI-Tools (Claude Code, ChatGPT, …) bereit. Da es sich um private Finanzdokumente handelt: **read-only als Default**, Transport/Auth bewusst gewählt. |
-| **Extern: Scanner-Projekt** | Nutzt die Core-Lib zum direkten Upload gescannter Dokumente nach Fileee. |
+| **Core-Lib** (`fileee/`) | Auth (Session-Cookie + TOTP), Entities, Download, Upload. Zustandslos — der Aufrufer hält den Sync-Cursor. Kein Ziel-/Fremdsystem-Wissen. |
+| **CLI** (`cmd/fileee`) | **Generische** CLI: `export` / `sync` / `download` / `upload` in ein dauerhaftes Disk-Archiv. Kein DMS-/zielsystem-spezifischer Code. |
+| **MCP-Server** (`cmd/fileee-mcp`) | Stellt Fileee-Inhalte für AI-Tools (Claude Code, ChatGPT, …) bereit. Da es sich um private Finanzdokumente handelt: **read-only als Default**, Transport/Auth bewusst gewählt. |
+| **Externe Consumer** | Importieren die Core-Lib als Go-Modul — z. B. eine Paperless-Migration oder ein Scanner-Projekt. Nicht Teil dieses Repos. |
 
 ## Geplante Modulstruktur
 
 ```
 go-fileee/
-├── fileee/              # Core-Lib: Auth, Entities, Client
+├── fileee/              # Core-Lib: Auth, Entities, Client (domänen-neutral)
 │   ├── auth.go          # Session-Cookie-Login + TOTP
 │   ├── documents.go      # Dokumente: query/diff/get/put/upload
-│   ├── companies.go      # Firmen (→ Paperless Correspondents)
+│   ├── companies.go      # Firmen
 │   ├── contacts.go        # Kontakte (CRUD)
-│   ├── tags.go            # Tags (→ Paperless Tags)
-│   ├── documenttypes.go   # Dokumenttypen (→ Paperless Document-Types)
+│   ├── tags.go            # Tags
+│   ├── documenttypes.go   # Dokumenttypen
 │   └── client.go          # HTTP-Client, Cookie-Jar, CSRF-Handling
 ├── cmd/
-│   ├── fileee/            # CLI: Export, Migration, Sync
+│   ├── fileee/            # generische CLI: export / sync / download / upload
 │   └── fileee-mcp/        # MCP-Server für AI-Zugriff
-├── internal/
-│   └── paperless/         # Paperless-ngx-spezifisches Mapping (nur CLI)
 ├── docs/
 │   ├── API.md              # Fileee-API-Referenz (secret-safe, aus HAR rekonstruiert)
 │   └── adr/                # Architecture Decision Records
 └── fixtures/               # HAR-abgeleitete Test-Fixtures (keine echten Secrets)
 ```
+
+> Kein `internal/paperless` oder anderes zielsystem-spezifisches Paket — solche Integrationen sind externe Consumer-Projekte (siehe [ADR-0006](docs/adr/0006-domaenen-neutralitaet.md)).
 
 ## Auth-Modell (Kurzfassung)
 
@@ -82,7 +91,7 @@ Dies ist **kein offizielles Fileee-API** — es handelt sich um eine Rekonstrukt
 
 ## Dokumentation
 
-- [`docs/API.md`](docs/API.md) — vollständige API-Referenz (Endpunkte, Auth-Ablauf, Datenmodell-Mapping nach Paperless-ngx)
+- [`docs/API.md`](docs/API.md) — vollständige API-Referenz (Endpunkte, Auth-Ablauf, Datenmodell; das enthaltene Paperless-Mapping ist ein Beispiel für externe Consumer, nicht Teil der Lib)
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (Grundsatzentscheidungen zu Architektur, Auth, Risiko, Tests)
 
 ## Lizenz

@@ -6,14 +6,14 @@ Diese Datei richtet sich an Claude Code (und andere KI-Agents), die in diesem Re
 
 **go-fileee** ist eine Go-Library, die das **interne** Web-App-API von [Fileee](https://www.fileee.com) (`my.fileee.com`) kapselt. Es gibt **kein offizielles Fileee-API** — dieses Repo rekonstruiert das Protokoll der Web-App aus mitgeschnittenem Traffic eines eigenen Kontos.
 
-Drei Konsumenten teilen sich die Library:
+go-fileee ist **domänen-neutral** — es enthält keinen Ziel-/Fremdsystem-Code. Komponenten:
 
 | Modul | Zweck |
 |-------|-------|
 | **Core-Lib** (`fileee/`) | Auth (Session-Cookie + TOTP), Entities, Download, Upload. Zustandslos. |
-| **CLI** (`cmd/fileee`) | Export → Disk-Archiv → Migration nach Paperless-ngx + inkrementeller Sync. |
+| **CLI** (`cmd/fileee`) | **Generische** CLI: `export` / `sync` / `download` / `upload` in ein dauerhaftes Disk-Archiv. |
 | **MCP-Server** (`cmd/fileee-mcp`) | Fileee-Inhalte für AI-Tools (Claude Code, ChatGPT). |
-| Extern: Scanner-Projekt | Importiert die Core-Lib für den Upload gescannter Dokumente. |
+| Externe Consumer | Importieren die Core-Lib — z. B. eine Paperless-Migration oder ein Scanner-Projekt. **Nicht Teil dieses Repos.** |
 
 Referenzen für jede Arbeit an diesem Repo:
 - **API-Referenz:** [`docs/API.md`](docs/API.md) — Endpunkte, Auth-Ablauf, Datenmodell, Paperless-Mapping.
@@ -27,10 +27,10 @@ Referenzen für jede Arbeit an diesem Repo:
 
 ## Architektur / Modulschnitt (VERBINDLICH)
 
-Siehe [ADR-0001](docs/adr/0001-library-first-architektur.md).
+Siehe [ADR-0001](docs/adr/0001-library-first-architektur.md) und [ADR-0006](docs/adr/0006-domaenen-neutralitaet.md).
 
-- Die **Core-Lib (`fileee/`) ist zustandslos** — der **Sync-Cursor liegt beim Aufrufer** (wird übergeben/zurückgegeben, nicht in der Lib gehalten).
-- **Paperless-Wissen (Mapping, Paperless-API-Calls) lebt NUR in `cmd/fileee` bzw. `internal/paperless`** — **NIE** in der Core-Lib. Die Lib kennt Paperless nicht.
+- Die **Core-Lib (`fileee/`) ist zustandslos und domänen-neutral** — der **Sync-Cursor liegt beim Aufrufer** (wird übergeben/zurückgegeben, nicht in der Lib gehalten).
+- **Kein Domänen-/Zielsystem-Code im Repo** — die CLI ist **generisch** (`export`/`sync`/`download`/`upload`), kein DMS-/zielsystem-spezifischer Code. Solche Integrationen (z. B. eine Paperless-Migration) sind **externe Konsumenten**, die go-fileee importieren.
 - **CLI und MCP-Server sind dünne Adapter** über der Core-Lib — keine Fileee-Protokoll-Logik duplizieren, keine Geschäftslogik in die Adapter verlagern, die in die Lib gehört.
 
 ## Auth (kurz)
