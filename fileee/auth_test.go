@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -388,6 +389,78 @@ func TestReauthenticateFaelltAufVollenLoginZurueck(t *testing.T) {
 	// Kein rememberMe-Cookie gesetzt -> tokenLogin schlägt fehl -> Fallback auf login().
 	if err := a.reauthenticate(context.Background()); err != nil {
 		t.Fatalf("reauthenticate: %v", err)
+	}
+}
+
+// TestReauthenticateBewahrtUrsprungsfehler deckt den zweiten Fix aus dem finalen
+// Whole-Branch-Review ab: reauthenticate() darf den Fehler des vollen Logins NICHT mehr maskieren.
+// Ein Aufrufer muss über errors.Is BEIDES prüfen können — dass es sich um einen
+// Session-Expired-Fall handelt (bestehender Vertrag, ErrSessionExpired) UND welcher konkrete
+// Fehler dahintersteckt (hier: ErrInvalidCredentials, weil /f/existent existent:false meldet).
+func TestReauthenticateBewahrtUrsprungsfehler(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/f/start":     {Status: 204},
+		"POST /api/f/existent": {Status: 200, Body: []byte(`{"existent":false,"twoFactorAuthEnabled":false}`)},
+	}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	// Kein rememberMe-Cookie gesetzt -> tokenLogin schlägt fehl -> Fallback auf login(), das wegen
+	// existent:false mit ErrInvalidCredentials fehlschlägt.
+	err := a.reauthenticate(context.Background())
+	if err == nil {
+		t.Fatalf("erwartet Fehler, bekommen nil")
+	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("erwartet errors.Is(err, ErrSessionExpired) == true (bestehender Vertrag), bekommen %v", err)
+	}
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Ursprungsfehler ErrInvalidCredentials nicht mehr über errors.Is auffindbar (maskiert): %v", err)
+	}
+}
+
+// TestEnsureSessionOhneGespeicherteSessionBewahrtUrsprungsfehler deckt denselben Fix auf
+// EnsureSession-Ebene ab: EnsureSession funnelt ohne gespeicherte Session direkt in
+// reauthenticate() — der maskierte Fehler darf auch über diesen Aufrufpfad nicht mehr verloren
+// gehen.
+func TestEnsureSessionOhneGespeicherteSessionBewahrtUrsprungsfehler(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/f/start":     {Status: 204},
+		"POST /api/f/existent": {Status: 200, Body: []byte(`{"existent":false,"twoFactorAuthEnabled":false}`)},
+	}
+	srv := newMockServer(t, jsonHandler(t, routes))
+	a := newTestAuthClient(t, srv, Credentials{Username: "test@example.invalid", Password: "test-pw"})
+	err := a.EnsureSession(context.Background())
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("erwartet errors.Is(err, ErrSessionExpired) == true, bekommen %v", err)
+	}
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Ursprungsfehler ErrInvalidCredentials nicht mehr über errors.Is auffindbar: %v", err)
+	}
+}
+
+// TestReauthenticateNetzwerkfehlerBleibtUeberErrorsAsAuffindbar belegt, dass auch ein transienter
+// Netzwerkfehler (nicht nur ein sentinel-basierter API-Fehler) nach dem Fix erhalten bleibt und
+// über errors.As als *url.Error identifizierbar ist — ein Aufrufer kann damit "Netzwerk kurz down"
+// von "Credentials sind ungültig/veraltet" unterscheiden, statt beides zu ErrSessionExpired
+// zusammenzufalten.
+func TestReauthenticateNetzwerkfehlerBleibtUeberErrorsAsAuffindbar(t *testing.T) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	a := &authClient{
+		hc:      &http.Client{Jar: jar},
+		baseURL: "http://127.0.0.1:1", // Port 1: verbindungsverweigert, kein echter Server nötig.
+		creds:   Credentials{Username: "test@example.invalid", Password: "test-pw"},
+		store:   NewFileSessionStore(filepath.Join(t.TempDir(), "session.json")),
+	}
+	err = a.reauthenticate(context.Background())
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("erwartet errors.Is(err, ErrSessionExpired) == true, bekommen %v", err)
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("erwartet *url.Error über errors.As auffindbar (Netzwerkfehler wurde maskiert): %v", err)
 	}
 }
 

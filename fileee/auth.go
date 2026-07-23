@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -275,13 +276,19 @@ func (a *authClient) tokenLogin(ctx context.Context) error {
 }
 
 // reauthenticate implementiert §4.5 der Umbrella-Spec: zuerst token/login (rememberMe), bei
-// Fehlschlag voller Passwort+TOTP-Login. Schlägt auch das fehl -> ErrSessionExpired.
+// Fehlschlag voller Passwort+TOTP-Login. Schlägt auch das fehl -> Fehler, der SOWOHL über
+// errors.Is(err, ErrSessionExpired) auffindbar ist (bestehender Vertrag aller Aufrufer) ALS AUCH
+// den zugrundeliegenden Fehler von login() bewahrt (errors.Is/errors.As) — vorher wurde dieser
+// Fehler mit dem bloßen Rückgabewert ErrSessionExpired verworfen, ein Aufrufer konnte "Netzwerk
+// kurz down" nicht von "Credentials sind ungültig/veraltet" unterscheiden (Whole-Branch-Review-
+// Finding). EnsureSession funnelt auch gültige-Session-Netzwerkfehler hierher, daher ist die
+// Unterscheidbarkeit wichtig.
 func (a *authClient) reauthenticate(ctx context.Context) error {
 	if err := a.tokenLogin(ctx); err == nil {
 		return nil
 	}
 	if err := a.login(ctx); err != nil {
-		return ErrSessionExpired
+		return errors.Join(ErrSessionExpired, fmt.Errorf("fileee: reauth fehlgeschlagen: %w", err))
 	}
 	return nil
 }
