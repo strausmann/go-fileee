@@ -55,6 +55,38 @@ func newMockServer(t *testing.T, handler http.Handler) *httptest.Server {
 	return srv
 }
 
+// newMockJSONCaptureServer baut einen httptest.Server, der für EnsureSession-Routen normal
+// über die einfache mockRoute-Tabelle antwortet (authRoutes) und für method+path den
+// ROH-Request-Body an handler weiterreicht, bevor handler über Status+Antwort-Body entscheidet.
+// Analog zu newMockUploadServer (documents_test.go), aber ohne Multipart-Parsing — damit lässt
+// sich das TATSÄCHLICH GESENDETE Wire-Format eines JSON-Requests prüfen (z.B. Contacts.Create
+// oder restService.Diff), statt nur die Antwort-Dekodierung zu testen. Der Aufrufer entscheidet
+// selbst, ob er den rohen Body per json.Unmarshal in eine Map, eine json.RawMessage-Map oder
+// einen konkreten Wire-Typ dekodiert (je nachdem, ob Feldwerte oder das exakte Array/Null-Format
+// geprüft werden soll).
+func newMockJSONCaptureServer(t *testing.T, authRoutes map[string]mockRoute, method, path string, handler func(rawBody []byte) (status int, respBody []byte)) *httptest.Server {
+	t.Helper()
+	base := jsonHandler(t, authRoutes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == method && r.URL.Path == path {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("Request-Body von %s %s lesen: %v", method, path, err)
+			}
+			status, respBody := handler(raw)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			if len(respBody) > 0 {
+				_, _ = w.Write(respBody)
+			}
+			return
+		}
+		base(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // TestJSONHandlerRoutesAndFallback ist der Selbsttest des Mock-Helpers: eine hinterlegte Route
 // liefert Status+Body+Cookie korrekt, eine nicht hinterlegte Route liefert 404 mit ApiError-Body.
 func TestJSONHandlerRoutesAndFallback(t *testing.T) {

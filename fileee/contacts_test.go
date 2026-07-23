@@ -2,7 +2,9 @@ package fileee
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"testing"
 )
@@ -104,4 +106,62 @@ func TestContactServiceUpdateHappyErrorNetwork(t *testing.T) {
 			t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
 		}
 	})
+}
+
+// TestContactServiceCreateSendetPflichtfelderImRequestBody belegt das Wire-Format, dessen Fehlen
+// live gegen das Testkonto einen 400 ausgelöst hat (siehe Kommentar über contactCreateWire in
+// contacts.go): Create() MUSS contactStatus/connectedToOtherUser/fromUserDb/documentCounter/
+// deleted/version im TATSÄCHLICH GESENDETEN JSON-Body mitschicken. Bisher prüfte kein Test den
+// gesendeten Request-Body, sondern nur die Antwort-Dekodierung (siehe
+// TestContactServiceCreateHappyErrorNetwork) — ein Regressionsrisiko: eine künftige Änderung an
+// contactCreateWire/Create() könnte diese Pflichtfelder wieder verlieren, ohne dass ein Test
+// anschlägt. Der body-inspizierende Mock-Handler (newMockJSONCaptureServer, analog zu
+// newMockUploadServer in documents_test.go) fängt den POST /api/contacts/rest Request ab und
+// dekodiert ihn generisch in eine map[string]any, damit exakt die gesendeten Feldwerte geprüft
+// werden können — inklusive des CUSTOM-Defaults für contactStatus, wenn der Aufrufer (wie hier)
+// keinen Status vorgibt.
+func TestContactServiceCreateSendetPflichtfelderImRequestBody(t *testing.T) {
+	var gotBody map[string]any
+	authRoutes := ensureSessionRoutes()
+	srv := newMockJSONCaptureServer(t, authRoutes, http.MethodPost, "/api/contacts/rest", func(raw []byte) (int, []byte) {
+		if err := json.Unmarshal(raw, &gotBody); err != nil {
+			t.Fatalf("gesendeten Contact-Create-Body dekodieren: %v (Body: %s)", err, raw)
+		}
+		return http.StatusOK, []byte(`{"id":"contact-neu"}`)
+	})
+	client := newTestClientAgainstMockServer(t, srv)
+
+	_, err := client.Contacts.Create(context.Background(), &Contact{FirstName: "Max", LastName: "Testmann"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatalf("Mock-Handler wurde nicht aufgerufen — kein Request-Body eingefangen")
+	}
+
+	if _, present := gotBody["id"]; !present {
+		t.Fatalf("Pflichtfeld id fehlt im gesendeten Body: %+v", gotBody)
+	}
+
+	requiredZeroValueFelder := map[string]any{
+		"connectedToOtherUser": false,
+		"fromUserDb":           false,
+		"documentCounter":      float64(0),
+		"deleted":              false,
+		"version":              float64(0),
+	}
+	for feld, erwartet := range requiredZeroValueFelder {
+		got, present := gotBody[feld]
+		if !present {
+			t.Fatalf("Pflichtfeld %q fehlt im gesendeten Body: %+v", feld, gotBody)
+		}
+		if got != erwartet {
+			t.Fatalf("Feld %q = %v (%T), erwartet %v (%T)", feld, got, got, erwartet, erwartet)
+		}
+	}
+
+	status, _ := gotBody["contactStatus"].(string)
+	if status != string(ContactStatusCustom) {
+		t.Fatalf("contactStatus = %q, erwartet CUSTOM-Default %q (kein Status vom Aufrufer vorgegeben)", status, ContactStatusCustom)
+	}
 }

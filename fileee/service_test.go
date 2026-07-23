@@ -2,9 +2,11 @@ package fileee
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -166,6 +168,57 @@ func TestCompanyServiceDiff(t *testing.T) {
 	}
 	if len(result.Rows) != 1 || result.NextCursor.Known["company-1"] != 0 {
 		t.Fatalf("Diff-Ergebnis falsch: %+v", result)
+	}
+}
+
+// TestRestServiceDiffSendetCriteriaUndSortOrderAlsLeeresArray belegt das Wire-Format von
+// restService.Diff (service.go): der TATSÄCHLICH GESENDETE Request-Body MUSS "criteria":[] und
+// "sortOrder":[] als leeres Array enthalten — NICHT als null. Das ist konsistent zu
+// QueryOptions.toWire() (query.go), das Criteria/SortOrder ebenfalls über make([]T, 0, ...) statt
+// eines nil-Slice aufbaut. Bisher prüfte kein Test den gesendeten Diff-Body, sondern nur die
+// Antwort-Dekodierung (siehe TestCompanyServiceDiff) — ein nil-Slice würde vom encoding/json-
+// Encoder als "null" statt "[]" serialisiert, was der Server je nach Implementierung anders
+// behandeln könnte als ein explizit leeres Array. Companies nutzt restService[Company] direkt
+// ohne eigene Diff()-Überschreibung (companies.go) und ist damit der einfachste Vertreter für
+// den generischen Diff-Pfad. Die Prüfung dekodiert den rohen Body in eine
+// map[string]json.RawMessage, damit "[]" und "null" (die sich beide anstandslos in
+// map[string]any zu einem nil-Interface bzw. einem leeren Slice dekodieren ließen) eindeutig als
+// Roh-Bytes unterschieden werden.
+func TestRestServiceDiffSendetCriteriaUndSortOrderAlsLeeresArray(t *testing.T) {
+	var gotRaw []byte
+	authRoutes := ensureSessionRoutes()
+	srv := newMockJSONCaptureServer(t, authRoutes, http.MethodPost, "/api/companies/rest/diff", func(raw []byte) (int, []byte) {
+		gotRaw = raw
+		return http.StatusOK, []byte(`{"rows":[],"idsToDelete":[],"totalRows":0}`)
+	})
+	client := newTestClientAgainstMockServer(t, srv)
+
+	if _, err := client.Companies.Diff(context.Background(), NewCursor("Company")); err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if gotRaw == nil {
+		t.Fatalf("Mock-Handler wurde nicht aufgerufen — kein Request-Body eingefangen")
+	}
+
+	var felder map[string]json.RawMessage
+	if err := json.Unmarshal(gotRaw, &felder); err != nil {
+		t.Fatalf("gesendeten Diff-Body dekodieren: %v (Body: %s)", err, gotRaw)
+	}
+
+	criteria, present := felder["criteria"]
+	if !present {
+		t.Fatalf("Feld criteria fehlt im gesendeten Body: %s", gotRaw)
+	}
+	if got := strings.TrimSpace(string(criteria)); got != "[]" {
+		t.Fatalf("criteria = %q, erwartet leeres Array \"[]\" (nicht null)", got)
+	}
+
+	sortOrder, present := felder["sortOrder"]
+	if !present {
+		t.Fatalf("Feld sortOrder fehlt im gesendeten Body: %s", gotRaw)
+	}
+	if got := strings.TrimSpace(string(sortOrder)); got != "[]" {
+		t.Fatalf("sortOrder = %q, erwartet leeres Array \"[]\" (nicht null)", got)
 	}
 }
 
