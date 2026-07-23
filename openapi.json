@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Fileee Internal API (reverse-engineered)",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "KEIN offizielles API. Dies ist die interne Web-App-API von my.fileee.com, rekonstruiert aus eigenem, eingeloggtem HAR-Traffic und Offline-Analyse des an den Browser ausgelieferten Anwendungscodes (416 JS-Bundle-Dateien, darunter ein Kotlin/JS-kompiliertes Core-SDK io.fileee.shared.*). Kein Reverse-Engineering von Server-Binaries, keine oeffentliche API-Zusage von fileee. Sie kann sich jederzeit aendern. Nutzung ausschliesslich gegen das EIGENE Konto, mit konservativem Rate-Limiting (Token-Bucket, exponentielles Backoff bei 429/5xx und bei secondsBlocked > 0). Basis fuer die Go-Library strausmann/go-fileee. Felder/Endpunkte mit x-unverified:true sind noch nicht live gegen ein Test-Konto verifiziert (siehe docs/API.md Abschnitt 9 'Verifikations-Status').",
     "contact": {
       "name": "strausmann/go-fileee",
@@ -422,7 +422,7 @@
     "/api/documents/rest": {
       "post": {
         "summary": "Dokument anlegen (Upload)",
-        "description": "id wird CLIENT-generiert (InstanceHelper.newObjectId()) und immer mitgesendet, nicht vom Server vergeben. file kann mehrfach angehaengt werden. Serverseitige Duplikaterkennung: weicht response.data.id von der gesendeten id ab, hat der Server ein bereits existierendes Dokument erkannt statt ein neues anzulegen.",
+        "description": "id wird CLIENT-generiert (InstanceHelper.newObjectId()) im 24-stelligen Hex-ObjectId-Format (keine UUID) und immer mitgesendet, nicht vom Server vergeben. file kann mehrfach angehängt werden. Serverseitige Duplikaterkennung: weicht response.data.id von der gesendeten id ab, hat der Server ein bereits existierendes Dokument erkannt statt ein neues anzulegen. Auto-Klassifizierung (live bestätigt 2026-07-23, API.md Abschnitt 9.1): nach dem Upload durchläuft status asynchron NEW -> ANALYSING -> CLASSIFIED (im Test ~22s bis CLASSIFIED). Erst ab CLASSIFIED (bzw. mindestens ANALYSING) sind auto-extrahierte Felder in attributes.data (u.a. documentTypeId, invoiceId, invoiceDate, amount, senderId, customerId, bankAccount1.iban, paymentReference, title) belastbar - vorher nicht als final annehmen. invoiceDueDate wird dabei NICHT automatisch extrahiert und bleibt typischerweise leer, auch bei klar erkannter Rechnung.",
         "tags": [
           "Documents"
         ],
@@ -455,9 +455,10 @@
                   },
                   "id": {
                     "type": "string",
-                    "description": "Client-generierte ID (InstanceHelper.newObjectId()), IMMER gesendet.",
+                    "description": "Client-generierte ID (InstanceHelper.newObjectId()), IMMER gesendet. Format: 24-stelliger Hex-String im MongoDB-ObjectId-Format, keine UUID (live-verifiziert 2026-07-23, API.md Abschnitt 9.1).",
+                    "pattern": "^[0-9a-fA-F]{24}$",
                     "examples": [
-                      "<client-generierte-id>"
+                      "<24-hex-objectid>"
                     ]
                   },
                   "document": {
@@ -646,7 +647,7 @@
       },
       "delete": {
         "summary": "Dokument hart loeschen",
-        "description": "Code-belegt (generischer REST-Client deleteById(), baseUrl=documents/rest, HTTP DELETE). Im Live-Traffic NIE beobachtet - die Web-UI nutzt fuer Dokumente standardmaessig den Soft-Delete/Trash-Flow (siehe /api/deleted-documents/*). Vor produktivem Einsatz gegen ein Test-Konto verifizieren, ob dieser Pfad fuer bereits nicht-geloeschte Dokumente ueberhaupt akzeptiert wird.",
+        "description": "LIVE BESTÄTIGT (2026-07-23, API.md Abschnitt 9.1, Punkt 5): Code-belegt (generischer REST-Client deleteById(), baseUrl=documents/rest, HTTP DELETE) und gezielt gegen das Test-Konto verifiziert - der Endpunkt akzeptiert das harte Löschen eines nicht-gelöschten Dokuments und antwortet mit 204. Im ursprünglichen Live-Traffic nie beobachtet, da die Web-UI für Dokumente standardmäßig den Soft-Delete/Trash-Flow nutzt (siehe /api/deleted-documents/*) - für normale Lösch-Flows bleibt der Papierkorb-Pfad die empfohlene Wahl, das harte DELETE ist aber für Lib-Konsumenten nutzbar, die endgültiges Löschen ohne Papierkorb-Umweg brauchen.",
         "tags": [
           "Documents"
         ],
@@ -662,8 +663,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Hart geloescht."
+          "204": {
+            "description": "Hart gelöscht (LIVE bestätigt: 204, kein Response-Body)."
           },
           "404": {
             "description": "Objekt mit dieser ID nicht gefunden.",
@@ -2181,7 +2182,7 @@
     "/api/contacts/rest": {
       "post": {
         "summary": "Kontakt anlegen",
-        "description": "firstName/lastName erscheinen im GET, nicht im beobachteten POST-Body - live verifizieren, moeglicherweise in address/separat.",
+        "description": "GEKLÄRT (Live-Verifikation 2026-07-23, API.md Abschnitt 9.1, Punkt 6): firstName/lastName werden im POST-Body akzeptiert. Mehrere Felder sind dabei Pflichtfelder, nicht optional: contactStatus, connectedToOtherUser, fromUserDb, documentCounter, deleted, version (siehe ContactCreateRequest.required).",
         "tags": [
           "Contacts"
         ],
@@ -2347,6 +2348,55 @@
             "xsrfToken": []
           }
         ]
+      },
+      "delete": {
+        "summary": "Kontakt hart löschen",
+        "description": "LIVE BESTÄTIGT (2026-07-23, API.md Abschnitt 9.1, Punkt 5): gezielt gegen das Test-Konto verifiziert - antwortet mit 204. Analog zu DELETE /api/documents/rest/{id}.",
+        "tags": [
+          "Contacts"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Kontakt-ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Hart gelöscht (LIVE bestätigt: 204, kein Response-Body)."
+          },
+          "404": {
+            "description": "Objekt mit dieser ID nicht gefunden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Ungueltige/abgelaufene Session oder fehlgeschlagenes CSRF-Double-Submit (kein gueltiges JSESSIONID/x-xsrf-token-Paar). LIVE bestaetigt (part4, 2026-07-23): Body ist bei diff-Endpunkten teils leer, bei anderen Endpunkten (z.B. /f/exists) ApiError. Re-Auth-Regel: POST /api/f/token/login mit rememberMe versuchen, dann 1x wiederholen.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": [],
+            "xsrfToken": []
+          }
+        ]
       }
     },
     "/api/document-types/rest/query": {
@@ -2442,6 +2492,100 @@
                       "type": "integer"
                     }
                   }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Ungueltige/abgelaufene Session oder fehlgeschlagenes CSRF-Double-Submit (kein gueltiges JSESSIONID/x-xsrf-token-Paar). LIVE bestaetigt (part4, 2026-07-23): Body ist bei diff-Endpunkten teils leer, bei anderen Endpunkten (z.B. /f/exists) ApiError. Re-Auth-Regel: POST /api/f/token/login mit rememberMe versuchen, dann 1x wiederholen.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": [],
+            "xsrfToken": []
+          }
+        ]
+      }
+    },
+    "/api/document-types/rest/diff": {
+      "post": {
+        "summary": "Dokumenttyp-Werte Delta-Sync",
+        "description": "LIVE BESTÄTIGT (2026-07-23, API.md Abschnitt 9.1, Punkt 10): Neben query liefert auch dieser diff-Endpunkt direkt 200 - die generische diff-Konvention gilt für document-types genau wie für alle anderen Sync-fähigen Ressourcen, nicht nur für query.",
+        "tags": [
+          "DocumentTypes"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiffRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delta-Ergebnis (rows[] je DocumentType).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiffResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Ungueltige/abgelaufene Session oder fehlgeschlagenes CSRF-Double-Submit (kein gueltiges JSESSIONID/x-xsrf-token-Paar). LIVE bestaetigt (part4, 2026-07-23): Body ist bei diff-Endpunkten teils leer, bei anderen Endpunkten (z.B. /f/exists) ApiError. Re-Auth-Regel: POST /api/f/token/login mit rememberMe versuchen, dann 1x wiederholen.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": [],
+            "xsrfToken": []
+          }
+        ]
+      }
+    },
+    "/api/document-type-schemes/rest/diff": {
+      "post": {
+        "summary": "Dokumenttyp-Schemata Delta-Sync",
+        "description": "LIVE BESTÄTIGT (2026-07-23, API.md Abschnitt 9.1, Punkt 10): Neben query liefert auch dieser diff-Endpunkt direkt 200 - die generische diff-Konvention gilt für document-type-schemes genau wie für alle anderen Sync-fähigen Ressourcen, nicht nur für query.",
+        "tags": [
+          "DocumentTypes"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiffRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delta-Ergebnis (rows[] je DocumentTypeScheme).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiffResult"
                 }
               }
             }
@@ -3073,7 +3217,7 @@
     "schemas": {
       "PublicDocumentStatus": {
         "type": "string",
-        "description": "Realer Verarbeitungsstatus eines Dokuments (io.fileee.shared.enums.PublicDocumentStatus, 11 Werte, aus Core-SDK-Bytecode belegt). Seitenbild wird bereits ab ANALYSING angezeigt (nicht erst nach DONE); UPLOADING/IP/NEW/ERROR zeigen einen Platzhalter. NEW ist der lokale Optimistic-UI-Zustand direkt nach Upload-Start, bevor die Server-Antwort da ist. Abgrenzung: IdentStatus (NEW, IN_PROCESS, COMPLETED, FAILED) ist eine eigenstaendige, unabhaengige Enum fuer einen Identitaetspruefungs-/KYC-Flow - nicht zu verwechseln, auch wenn beide mit NEW beginnen.",
+        "description": "Realer Verarbeitungsstatus eines Dokuments (io.fileee.shared.enums.PublicDocumentStatus, 11 Werte, aus Core-SDK-Bytecode belegt). Seitenbild wird bereits ab ANALYSING angezeigt (nicht erst nach DONE); UPLOADING/IP/NEW/ERROR zeigen einen Platzhalter. NEW ist der lokale Optimistic-UI-Zustand direkt nach Upload-Start, bevor die Server-Antwort da ist. Live bestätigter Upload-Lebenszyklus (2026-07-23, API.md Abschnitt 9.1): nach Upload durchläuft status asynchron NEW -> ANALYSING -> CLASSIFIED (im Test mit einer Fake-Rechnung ~22 Sekunden bis CLASSIFIED erreicht war); Fileee klassifiziert automatisch (documentTypeId wird gesetzt, Beispielwert \"bill\") und extrahiert Felder wie invoiceId/invoiceDate/amount/senderId/customerId/bankAccount1.iban/paymentReference/title - invoiceDueDate wird dabei NICHT automatisch extrahiert. Abgrenzung: IdentStatus (NEW, IN_PROCESS, COMPLETED, FAILED) ist eine eigenständige, unabhängige Enum für einen Identitätsprüfungs-/KYC-Flow - nicht zu verwechseln, auch wenn beide mit NEW beginnen.",
         "enum": [
           "UPLOADING",
           "IP",
@@ -3204,11 +3348,18 @@
             "description": "Interner Fehlercode/Fehlerklasse."
           },
           "errorCode": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "description": "Fehlercode (vor allem bei 404 belegt)."
+            "description": "Fehlercode (vor allem bei 404 belegt). Live-verifiziert (2026-07-23, API.md Abschnitt 9.1): kann als JSON-String ODER als JSON-Zahl kommen, nicht nur String."
           },
           "errorMessage": {
             "type": [
@@ -3228,7 +3379,7 @@
       },
       "AttributeSimple": {
         "type": "object",
-        "description": "Einfaches Attribut, z.B. title, invoiceId, senderId, receiverId, read, reviewed, contentLanguage, documentTypeId, invoiceDate, issueDate, preventAutoTitle.",
+        "description": "Einfaches Attribut, z.B. title, invoiceId, senderId, receiverId, read, reviewed, contentLanguage, documentTypeId, invoiceDate, issueDate, preventAutoTitle. Value-Typ ist je Schlüssel unterschiedlich (String/Bool/Zahl) - siehe AttributeDate für die DATE-typisierte Variante (invoiceDate, issueDate).",
         "properties": {
           "value": {
             "description": "Der eigentliche Attributwert (Platzhalter, kein echter Wert)."
@@ -3246,6 +3397,31 @@
             "description": "Typname des Attributs."
           }
         }
+      },
+      "AttributeDate": {
+        "type": "object",
+        "description": "DATE-typisiertes einfaches Attribut (invoiceDate, issueDate). Live-verifiziert (2026-07-23, API.md Abschnitt 9.1): value ist ein nacktes Datum im Format YYYY-MM-DD, kein RFC3339-Zeitstempel mit Uhrzeit/Zeitzone. Die Lib parst defensiv beide Formen.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AttributeSimple"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date",
+                "description": "Bare Date YYYY-MM-DD (kein RFC3339 date-time).",
+                "examples": [
+                  "2026-07-15"
+                ]
+              }
+            }
+          }
+        ]
       },
       "AttributeList": {
         "type": "object",
@@ -3286,15 +3462,17 @@
       },
       "AttributeGroup": {
         "type": "object",
-        "description": "Gruppen-Attribut, z.B. amount, bankAccount1. data traegt rekursiv dieselbe Wrapper-Struktur (amount.data = {currency, value}, bankAccount1.data = {iban, bic, bank, account_holder}).",
+        "description": "Gruppen-Attribut, z.B. amount, bankAccount1. KORRIGIERT (Live-Verifikation 2026-07-23, API.md Abschnitt 9.1): data trägt NICHT die nackten Unterwerte, sondern jedes Unterfeld ist selbst wieder ein vollständiger {value, modified, source, type}-Wrapper (rekursive Wrapper-Struktur, kein flaches Objekt). D.h. amount.data = {currency: {value, modified, source, type}, value: {value, modified, source, type}} und bankAccount1.data = {iban: {...}, bic: {...}, bank: {...}, account_holder: {...}} - jeweils vier vollwertige Wrapper, nicht vier rohe Strings.",
         "properties": {
           "attributeGroup": {
             "type": "string"
           },
           "data": {
             "type": "object",
-            "additionalProperties": true,
-            "description": "Rekursiv verschachtelte Attribute-Wrapper-Struktur."
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AttributeSimple"
+            },
+            "description": "Rekursiv verschachtelte Attribute-Wrapper-Struktur - jeder Schlüssel (z.B. currency, value bei amount; iban, bic, bank, account_holder bei bankAccount1) ist selbst ein AttributeSimple-Wrapper {value, modified, source, type}, kein roher Wert."
           },
           "modified": {
             "type": "string"
@@ -3308,10 +3486,13 @@
         }
       },
       "Attribute": {
-        "description": "Generischer, typisierter Metadaten-Wrapper aus attributes.data. Kein nackter Wert, sondern eine von vier Varianten: einfaches Attribut {value, modified, source, type}, Listen-Attribut (zusaetzlich containedType), Enum-Attribut {value, enumClassName, modified, type} (statt source), oder Gruppen-Attribut {attributeGroup, data, modified, source, type} - data traegt rekursiv dieselbe Wrapper-Struktur (z.B. amount.data = {currency, value}).",
+        "description": "Generischer, typisierter Metadaten-Wrapper aus attributes.data. Kein nackter Wert, sondern eine von fünf Varianten: einfaches Attribut {value, modified, source, type}, DATE-Attribut (AttributeSimple mit value als nacktem Datum YYYY-MM-DD, z.B. invoiceDate/issueDate), Listen-Attribut (zusätzlich containedType), Enum-Attribut {value, enumClassName, modified, type} (statt source), oder Gruppen-Attribut {attributeGroup, data, modified, source, type} - data trägt rekursiv dieselbe Wrapper-Struktur, jedes Unterfeld ein vollständiger AttributeSimple-Wrapper (z.B. amount.data = {currency: {value,...}, value: {value,...}}).",
         "oneOf": [
           {
             "$ref": "#/components/schemas/AttributeSimple"
+          },
+          {
+            "$ref": "#/components/schemas/AttributeDate"
           },
           {
             "$ref": "#/components/schemas/AttributeList"
@@ -3326,7 +3507,15 @@
       },
       "AttributesData": {
         "type": "object",
-        "description": "attributes.data eines Dokuments/einer Firma: pro Schluessel ein typisierter Attribute-Wrapper. Beobachtete Schluessel bei Dokumenten (Auszug): acceptedAttributes, amount, grossIncome, netIncome, autoProcessingStatus, bankAccount1, contentLanguage, customerId, documentTypeId, invoiceDate, issueDate, invoiceDueDate, invoiceId, maxPageNr, totalPageCount, payed, paymentReference, read, reviewed, secured, receiverId, senderId, tagIds, title.",
+        "description": "attributes.data eines Dokuments/einer Firma: pro Schlüssel ein typisierter Attribute-Wrapper. Beobachtete Schlüssel bei Dokumenten (Auszug): acceptedAttributes, amount, grossIncome, netIncome, autoProcessingStatus, bankAccount1, contentLanguage, customerId, documentTypeId (wird von Fileee automatisch gesetzt - Auto-Klassifizierung, siehe PublicDocumentStatus-Lebenszyklus und Beispielwert \"bill\"), invoiceDate, issueDate, invoiceDueDate (wird bei Auto-Klassifizierung NICHT automatisch extrahiert, bleibt typischerweise leer), invoiceId, maxPageNr, totalPageCount, payed, paymentReference, read, reviewed, secured, receiverId, senderId, tagIds, title. invoiceDate/issueDate sind explizit als AttributeDate typisiert (nacktes Datum), alle anderen Schlüssel über den generischen Attribute-oneOf.",
+        "properties": {
+          "invoiceDate": {
+            "$ref": "#/components/schemas/AttributeDate"
+          },
+          "issueDate": {
+            "$ref": "#/components/schemas/AttributeDate"
+          }
+        },
         "additionalProperties": {
           "$ref": "#/components/schemas/Attribute"
         }
@@ -3471,7 +3660,11 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Objekt-ID."
+            "description": "Objekt-ID. Live-verifiziert (2026-07-23, API.md Abschnitt 9.1): 24-stelliger Hex-String im MongoDB-ObjectId-Format, keine UUID. Bei POST /api/documents/rest (Upload) ist die id client-generiert (InstanceHelper.newObjectId()).",
+            "pattern": "^[0-9a-fA-F]{24}$",
+            "examples": [
+              "<24-hex-objectid>"
+            ]
           },
           "version": {
             "type": "integer",
@@ -3786,7 +3979,11 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Objekt-ID."
+            "description": "Objekt-ID. 24-stelliger Hex-String im MongoDB-ObjectId-Format, keine UUID (live-verifiziert 2026-07-23, API.md Abschnitt 9.1).",
+            "pattern": "^[0-9a-fA-F]{24}$",
+            "examples": [
+              "<24-hex-objectid>"
+            ]
           },
           "version": {
             "type": "integer",
@@ -3892,13 +4089,24 @@
       },
       "ContactCreateRequest": {
         "type": "object",
-        "description": "Body von POST /api/contacts/rest.",
+        "description": "Body von POST /api/contacts/rest. Live-verifiziert (2026-07-23, API.md Abschnitt 9.1, Punkt 6): contactStatus, connectedToOtherUser, fromUserDb, documentCounter, deleted und version sind PFLICHTFELDER - werden sie nicht mitgeschickt, schlägt das Anlegen fehl.",
         "required": [
-          "id"
+          "id",
+          "contactStatus",
+          "connectedToOtherUser",
+          "fromUserDb",
+          "documentCounter",
+          "deleted",
+          "version"
         ],
         "properties": {
           "id": {
-            "type": "string"
+            "type": "string",
+            "description": "Client-generierte ID im 24-stelligen Hex-ObjectId-Format (keine UUID).",
+            "pattern": "^[0-9a-fA-F]{24}$",
+            "examples": [
+              "<24-hex-objectid>"
+            ]
           },
           "companyId": {
             "type": [
@@ -3940,50 +4148,38 @@
             "$ref": "#/components/schemas/ContactStatus"
           },
           "connectedToOtherUser": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean",
+            "description": "Pflichtfeld (live-verifiziert 2026-07-23)."
           },
           "fromUserDb": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean",
+            "description": "Pflichtfeld (live-verifiziert 2026-07-23)."
           },
           "documentCounter": {
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer",
+            "description": "Pflichtfeld (live-verifiziert 2026-07-23)."
           },
           "deleted": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean",
+            "description": "Pflichtfeld (live-verifiziert 2026-07-23)."
           },
           "version": {
-            "type": [
-              "integer",
-              "null"
-            ]
+            "type": "integer",
+            "description": "Pflichtfeld (live-verifiziert 2026-07-23)."
           },
           "firstName": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Erscheint im GET-Response, aber NICHT im beobachteten POST-Body - live verifizieren, ob es beim Anlegen implizit aus address abgeleitet wird oder hier gesetzt werden kann.",
-            "x-unverified": true
+            "description": "GEKLÄRT (Live-Verifikation 2026-07-23, API.md Abschnitt 9.1, Punkt 6): wird im POST-Body akzeptiert - die frühere Unklarheit ist behoben."
           },
           "lastName": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Siehe firstName - gleicher offener Verifikationspunkt.",
-            "x-unverified": true
+            "description": "GEKLÄRT (Live-Verifikation 2026-07-23, API.md Abschnitt 9.1, Punkt 6): wird im POST-Body akzeptiert - die frühere Unklarheit ist behoben."
           }
         }
       },
@@ -4380,21 +4576,27 @@
       },
       "QueryRequest": {
         "type": "object",
-        "description": "Gemeinsamer Request-Body fuer POST .../rest/query.",
+        "description": "Gemeinsamer Request-Body für POST .../rest/query. Live-verifiziert (2026-07-23, API.md Abschnitt 9.1): criteria/sortOrder werden in echten Request-Bodies immer als leere Arrays [] gesendet (nicht null/weggelassen), auch wenn kein Filter/keine Sortierung gebraucht wird - defensiv immer [] statt nil/null serialisieren.",
         "properties": {
           "criteria": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Criterion"
             },
-            "description": "Filter - Array typisierter Bedingungen."
+            "description": "Filter - Array typisierter Bedingungen. Ohne Filter: leeres Array [] senden, nicht null/weglassen.",
+            "examples": [
+              []
+            ]
           },
           "sortOrder": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/SortOrder"
             },
-            "description": "Sortierung."
+            "description": "Sortierung. Ohne Sortierung: leeres Array [] senden, nicht null/weglassen.",
+            "examples": [
+              []
+            ]
           },
           "limit": {
             "type": "integer",
@@ -4501,19 +4703,27 @@
       },
       "DiffRequest": {
         "type": "object",
-        "description": "Request-Body fuer POST .../rest/diff - teilt sich criteria/sortOrder/limit/start mit QueryRequest, nutzt aber localResults statt onlyIds.",
+        "description": "Request-Body für POST .../rest/diff - teilt sich criteria/sortOrder/limit/start mit QueryRequest, nutzt aber localResults statt onlyIds. Live-verifiziert (2026-07-23, API.md Abschnitt 9.1): criteria/sortOrder werden immer als leere Arrays [] gesendet (nicht null/weggelassen), auch ohne Filter/Sortierung.",
         "properties": {
           "criteria": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Criterion"
-            }
+            },
+            "description": "Ohne Filter: leeres Array [] senden, nicht null/weglassen.",
+            "examples": [
+              []
+            ]
           },
           "sortOrder": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/SortOrder"
-            }
+            },
+            "description": "Ohne Sortierung: leeres Array [] senden, nicht null/weglassen.",
+            "examples": [
+              []
+            ]
           },
           "limit": {
             "type": "integer"
@@ -4527,7 +4737,7 @@
               "type": "object",
               "additionalProperties": true
             },
-            "description": "Dem Client bereits bekannte Objekte/Versionen (Sync-Cursor).",
+            "description": "Dem Client bereits bekannte Objekte/Versionen (Sync-Cursor). Live-Test (2026-07-23, API.md Abschnitt 9.1, Punkt 9): Die Delta-Wirkung ließ sich im Testkonto (kleine Datenmenge) nicht eindeutig von einem Voll-Snapshot unterscheiden - weiterhin nicht bestätigt. Die Lib behandelt ein unklares diff-Ergebnis deshalb fail-safe als Voll-Snapshot statt sich auf einen unbestätigten Delta-Mechanismus zu verlassen.",
             "x-unverified": true,
             "x-unverified-note": "Exakte Feld-Struktur von localResults ist nicht live verifiziert (siehe Skill-Troubleshooting 'diff liefert rows: [] obwohl sich etwas geaendert hat') - vor Implementierung gegen echten Traffic abgleichen."
           }

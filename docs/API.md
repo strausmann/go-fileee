@@ -1114,9 +1114,11 @@ GET    /api/contacts/rest/:id                    Kontakt
 PUT    /api/contacts/rest/:id                    Kontakt aendern (Muster analog Dokumente)
 DELETE /api/contacts/rest/:id                    Hart loeschen (LIVE bestaetigt: 204)
 
-# Document-Types & Schemes (2)
+# Document-Types & Schemes (4)
 POST   /api/document-types/rest/query            Dokumenttyp-Werte
+POST   /api/document-types/rest/diff             Dokumenttyp-Werte Delta-Sync (LIVE bestaetigt: 200)
 POST   /api/document-type-schemes/rest/query     Dokumenttyp-Schemata (Feld-Constraints)
+POST   /api/document-type-schemes/rest/diff      Dokumenttyp-Schemata Delta-Sync (LIVE bestaetigt: 200)
 
 # Weitere Sync-Ressourcen (7)
 POST   /api/conversations/rest/diff              Konversationen
@@ -1136,8 +1138,8 @@ POST   /api/:id/rest/diff                        generischer Diff
 ```
 
 **Zählung:** 10 (Auth) + 16 (Dokumente) + 3 (Papierkorb) + 3 (Fileee-Boxes) + 2 (Sharing) +
-2 (Tags) + 5 (Companies) + 4 (Contacts) + 2 (Document-Types) + 7 (Weitere) + 1 (Push) +
-2 (Generisch) = **57 Endpunkte**.
+2 (Tags) + 5 (Companies) + 4 (Contacts) + 4 (Document-Types) + 7 (Weitere) + 1 (Push) +
+2 (Generisch) = **59 Endpunkte**.
 
 ---
 
