@@ -47,4 +47,23 @@ if ! grep -q "FAIL: fileee/nicht-existent.go" <<<"$ausgabe"; then
     exit 1
 fi
 
+# Copilot-Review-Finding PR#7: ein führender Bindestrich in $pfad darf NICHT als grep-Option
+# interpretiert werden. "-fileee" ist ein echter Substring von "go-fileee" (dem Modulnamen, der
+# in JEDER Zeile des func_output steckt) — der Treffer MUSS gefunden werden. Live belegt: ohne
+# "grep -F --" (nur "grep -F") bricht ugrep in dieser Umgebung mit
+# "grep: ileee: No such file or directory" ab (interpretiert "-fileee" als "-f ileee"), was durch
+# "|| true" zu einem FALSCHEN "keine Coverage-Daten" führt, obwohl der Substring real vorhanden
+# ist. Schwelle 40% -> muss OK sein (50% Durchschnitt aus den zwei Zeilen oben).
+ausgabe=$(./scripts/coverage-gate-strict.sh "$tmpdir/cover.out" "-fileee:40" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -ne 0 ]]; then
+    echo "FEHLER: Gate hätte bei führendem Bindestrich in \$pfad ('-fileee', echter Substring von 'go-fileee') grün sein müssen, Ausgabe war:" >&2
+    echo "$ausgabe" >&2
+    exit 1
+fi
+if ! grep -q "OK:   -fileee" <<<"$ausgabe"; then
+    echo "FEHLER: Gate hätte den Substring-Treffer für '-fileee' melden müssen, Ausgabe war:" >&2
+    echo "$ausgabe" >&2
+    exit 1
+fi
+
 echo "coverage-gate-strict.sh Selbsttest: OK"

@@ -93,7 +93,10 @@ func (s *DocumentService) Upload(ctx context.Context, r io.Reader, meta UploadMe
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
 	}
-	clientID := newObjectID()
+	clientID, err := newObjectID()
+	if err != nil {
+		return nil, err
+	}
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)

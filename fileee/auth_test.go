@@ -137,6 +137,46 @@ func TestAuthClientLogin(t *testing.T) {
 	}
 }
 
+// TestAuthClientLogin2FAErforderlichAberSeedFehltFailtFastOhneLoginPost deckt das
+// Copilot-Review-Finding PR#7 ab: meldet /f/existent 2FA-Pflicht, aber Credentials.TOTPSeed ist
+// leer, darf login() NICHT erst ein leeres "two-factor-token" an POST /api/f/login senden und
+// den Fehlschlag über das generische ErrTwoFactorInvalid aus der Server-Antwort ableiten —
+// stattdessen MUSS VOR dem Login-Request abgebrochen werden, mit einer erklärenden Meldung.
+func TestAuthClientLogin2FAErforderlichAberSeedFehltFailtFastOhneLoginPost(t *testing.T) {
+	var loginHit bool
+	routes := map[string]mockRoute{
+		"GET /api/f/start":     {Status: 204},
+		"POST /api/f/existent": {Status: 200, Body: []byte(`{"existent":true,"twoFactorAuthEnabled":true}`)},
+		// Bewusst mit Erfolgs-Body hinterlegt: würde login() den Fail-Fast NICHT vor dem
+		// Login-Request auslösen, käme hier fälschlich ein "erfolgreicher" Login zurück statt
+		// eines 401/403 — der Test soll die fehlende Vor-Prüfung über loginHit erkennen, nicht
+		// über einen zufällig passenden Fehler-Statuscode.
+		"POST /api/f/login": {Status: 200, Body: []byte(`{"loggedIn":true}`)},
+	}
+	base := jsonHandler(t, routes)
+	srv := newMockServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/f/login" {
+			loginHit = true
+		}
+		base(w, r)
+	}))
+
+	// TOTPSeed bewusst leer, obwohl der Server twoFactorAuthEnabled:true meldet.
+	creds := Credentials{Username: "test4@example.invalid", Password: "test-pw"}
+	a := newTestAuthClient(t, srv, creds)
+	err := a.login(context.Background())
+
+	if !errors.Is(err, ErrTwoFactorInvalid) {
+		t.Fatalf("login error = %v, erwartet errors.Is(err, ErrTwoFactorInvalid)", err)
+	}
+	if err.Error() == ErrTwoFactorInvalid.Error() {
+		t.Fatalf("Fehlermeldung ist nur die generische Sentinel-Meldung %q, erwartet einen erklärenden Fail-Fast-Text (fehlender TOTP-Seed)", err.Error())
+	}
+	if loginHit {
+		t.Fatalf("POST /api/f/login wurde aufgerufen — der fehlende TOTP-Seed muss VOR dem Login-Request abgefangen werden, nicht erst über die Server-Antwort")
+	}
+}
+
 func TestAuthClientLoginNetworkError(t *testing.T) {
 	a := &authClient{
 		hc:      &http.Client{Timeout: 50 * time.Millisecond},

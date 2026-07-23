@@ -254,9 +254,35 @@ func decodeBoolValue(raw json.RawMessage) *bool {
 	return &b
 }
 
+// decodeIntValue dekodiert einen Ganzzahlwert, der im Wire-Format als JSON-Zahl ODER als
+// JSON-String kommen kann (analog flexInt64/Page — openapi.json erlaubt für manche Attribute
+// beide Varianten). Die ursprüngliche Fassung ignorierte den json.Unmarshal-Fehler und lieferte
+// für JEDES nicht-numerische JSON (inklusive numerischer Strings wie "3") still 0 zurück —
+// echte Werte gingen so unbemerkt verloren (Copilot-Review PR#7). Ein leerer String dekodiert
+// defensiv zu 0 (ADR-0003: reverse-engineertes API liefert nicht immer den erwarteten Wert),
+// echter Datenmüll bleibt 0, statt abzustürzen.
 func decodeIntValue(raw json.RawMessage) int {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0
+	}
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return 0
+		}
+		if s == "" {
+			return 0
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0
+		}
+		return int(n)
+	}
 	var f float64
-	_ = json.Unmarshal(raw, &f)
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return 0
+	}
 	return int(f)
 }
 

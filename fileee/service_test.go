@@ -240,6 +240,50 @@ func TestDocumentTypeServiceDiffFaelltAufQueryZurueck(t *testing.T) {
 	}
 }
 
+// TestNewObjectIDHappyPathLiefert24HexZeichenOhneFehler stellt sicher, dass der Normalfall
+// (Copilot-Review PR#7: newObjectID gibt jetzt (string, error) statt nur string zurück) weiterhin
+// eine 24-Hex-Zeichen-ID ohne Fehler liefert — Format-Anforderung aus dem Kommentar über
+// newObjectID (MongoDB-ObjectId-förmig, live gegen Testkonto verifiziert).
+func TestNewObjectIDHappyPathLiefert24HexZeichenOhneFehler(t *testing.T) {
+	id, err := newObjectID()
+	if err != nil {
+		t.Fatalf("newObjectID: unerwarteter Fehler %v", err)
+	}
+	if len(id) != 24 {
+		t.Fatalf("newObjectID Länge = %d, erwartet 24 (12 Byte als Hex)", len(id))
+	}
+	for _, r := range id {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("newObjectID enthält Nicht-Hex-Zeichen %q in %q", r, id)
+		}
+	}
+}
+
+// TestNewObjectIDSurfacedRandReadFehler deckt das Copilot-Review-Finding PR#7 ab: die
+// ursprüngliche Fassung ignorierte den Fehler von crypto/rand.Read (_, _ = rand.Read(...)) — bei
+// Entropie-Erschöpfung wäre eine All-Null-ID ("000000000000000000000000") mit Kollisionsrisiko
+// möglich gewesen, statt eines lauten Fehlers. randRead ist als Package-Var injizierbar
+// (service.go), damit dieser Fehlerfall ohne einen echten OS-Entropie-Ausfall testbar ist.
+func TestNewObjectIDSurfacedRandReadFehler(t *testing.T) {
+	original := randRead
+	t.Cleanup(func() { randRead = original })
+	wantErr := errors.New("entropie erschöpft (simuliert)")
+	randRead = func(b []byte) (int, error) {
+		return 0, wantErr
+	}
+
+	id, err := newObjectID()
+	if err == nil {
+		t.Fatalf("newObjectID: erwartet Fehler bei fehlgeschlagenem rand.Read, bekommen id=%q", id)
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("newObjectID error = %v, erwartet errors.Is(err, wantErr) (Ursprungsfehler muss durchgereicht werden)", err)
+	}
+	if id != "" {
+		t.Fatalf("newObjectID: erwartet leere id bei Fehler, bekommen %q", id)
+	}
+}
+
 // errorsIsNotFound kapselt errors.Is(err, ErrNotFound) für bessere Lesbarkeit in Testfällen.
 func errorsIsNotFound(err error) bool {
 	return errorsIs(err, ErrNotFound)

@@ -382,3 +382,48 @@ func TestPageMarshalEmittiertZahl(t *testing.T) {
 		t.Fatalf("imageVersion nach Round-Trip = %v, erwartet Zahl 7", decoded["imageVersion"])
 	}
 }
+
+// TestDecodeIntValueAkzeptiertZahlUndString deckt das Copilot-Review-Finding PR#7 ab:
+// decodeIntValue ignorierte bislang den json.Unmarshal-Fehler und lieferte für JEDES
+// nicht-numerische JSON (inklusive gültiger numerischer Strings wie "3", die openapi.json für
+// manche Attribute erlaubt) still 0 zurück — echte Werte gingen unbemerkt verloren. Analog zu
+// flexInt64 (Page.ImageVersion/ContentVersion) muss decodeIntValue jetzt sowohl eine JSON-Zahl
+// als auch einen numerischen JSON-String akzeptieren.
+func TestDecodeIntValueAkzeptiertZahlUndString(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"Zahl", `3`, 3},
+		{"NumerischerString", `"3"`, 3},
+		{"LeererString", `""`, 0},
+		{"Null", `null`, 0},
+		{"NichtNumerischerStringBleibtDefensiv0", `"nicht-numerisch"`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decodeIntValue(json.RawMessage(tc.raw))
+			if got != tc.want {
+				t.Errorf("decodeIntValue(%s) = %d, erwartet %d", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDocumentAttributesTotalPageCountAlsStringWirdDekodiert stellt sicher, dass der Fix auch
+// über den vollen rawAttribute-Wrapper-Pfad greift (nicht nur isoliert an decodeIntValue): ein
+// totalPageCount-Attribut, dessen "value" als JSON-STRING "3" statt als Zahl 3 ankommt, darf
+// NICHT still zu 0 verfallen.
+func TestDocumentAttributesTotalPageCountAlsStringWirdDekodiert(t *testing.T) {
+	raw := []byte(`{
+		"totalPageCount": {"value": "3", "type": "String"}
+	}`)
+	var attrs DocumentAttributes
+	if err := json.Unmarshal(raw, &attrs); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if attrs.TotalPageCount != 3 {
+		t.Errorf("TotalPageCount = %d, erwartet 3 (value kam als JSON-String \"3\")", attrs.TotalPageCount)
+	}
+}

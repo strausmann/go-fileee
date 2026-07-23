@@ -138,6 +138,11 @@ func (s *restService[T]) queryAllPages(ctx context.Context) ([]T, error) {
 	return all, nil
 }
 
+// randRead ist als Package-Var austauschbar (Standard: crypto/rand.Read), damit Tests eine
+// Entropie-Fehlersituation ohne echten OS-Fehler simulieren können (siehe newObjectID-Tests in
+// service_test.go).
+var randRead = rand.Read
+
 // newObjectID erzeugt eine clientseitige ID für Contact.Create-`id` und Document.Upload-`id`
 // (API.md §4.1) — bewusst ohne externe UUID-Dependency (Global Constraints: keine zusätzlichen
 // Runtime-Deps). Vollständig hier implementiert (nicht erst in Task 16), da Task 14 vor Task 16
@@ -151,8 +156,14 @@ func (s *restService[T]) queryAllPages(ctx context.Context) ([]T, error) {
 // akzeptiert (200, Contact angelegt). Die ursprüngliche Annahme "clientseitig generierte UUID"
 // (API.md §4.1, aus der Kotlin/JS-Code-Analyse von `InstanceHelper.newObjectId()` abgeleitet) war
 // zu diesem Punkt falsch/ungenau — der tatsächlich erwartete ID-Raum ist ObjectId-förmig.
-func newObjectID() string {
+//
+// Gibt (string, error) zurück statt den Fehler von rand.Read stillschweigend zu verschlucken
+// (Copilot-Review PR#7): bei Entropie-Erschöpfung wäre sonst ein All-Null-Byte-Slice ("000...0")
+// als ID möglich — mit Kollisionsrisiko über mehrere Aufrufe hinweg statt eines lauten Fehlers.
+func newObjectID() (string, error) {
 	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return fmt.Sprintf("%x", b)
+	if _, err := randRead(b[:]); err != nil {
+		return "", fmt.Errorf("fileee: objectId generieren: %w", err)
+	}
+	return fmt.Sprintf("%x", b), nil
 }

@@ -157,6 +157,15 @@ func (a *authClient) login(ctx context.Context) error {
 		return ErrInvalidCredentials
 	}
 
+	// Fail-fast VOR dem POST /api/f/login: meldet der Server 2FA-Pflicht, aber es liegt kein
+	// TOTP-Seed vor, würde der bisherige Code stillschweigend ein leeres "two-factor-token"
+	// senden — der Login schlägt dann erst am Server mit 401/403 fehl und der Aufrufer sieht nur
+	// das generische ErrTwoFactorInvalid, ohne zu erfahren, dass ihm schlicht der Seed fehlt
+	// (Copilot-Review PR#7). errors.Is(err, ErrTwoFactorInvalid) bleibt weiterhin true (%w).
+	if existent.TwoFactorAuthEnabled && a.creds.TOTPSeed == "" {
+		return fmt.Errorf("fileee: Konto erfordert 2FA, aber kein TOTP-Seed konfiguriert: %w", ErrTwoFactorInvalid)
+	}
+
 	form := url.Values{
 		"username":                     {a.creds.Username},
 		"password":                     {a.creds.Password},

@@ -50,7 +50,11 @@ func (s *contactService) Create(ctx context.Context, entity *Contact) (*Contact,
 	}
 	id := entity.ID
 	if id == "" {
-		id = newObjectID()
+		var err error
+		id, err = newObjectID()
+		if err != nil {
+			return nil, err
+		}
 	}
 	// contactStatus ist serverseitig Pflicht (siehe Kommentar contactCreateWire) — CUSTOM ist der
 	// Default für einen manuell angelegten, nicht mit einem anderen Nutzer verknüpften Kontakt

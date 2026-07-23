@@ -28,7 +28,14 @@ for spec in "$@"; do
     # STILLSCHWEIGEND beendet (Finding: "Silent skip on filename mismatch"). Ein Tippfehler im
     # Pfad oder eine umbenannte/entfernte Datei in der Schwellen-Liste muss LAUT als FAIL
     # gemeldet werden, statt alle nachfolgenden Prüfungen kommentarlos zu überspringen.
-    treffer=$(printf '%s\n' "$func_output" | grep -F "$pfad" || true)
+    #
+    # WICHTIG: "--" nach "-F" terminiert die Options-Erkennung von grep. Ohne "--" wird ein
+    # führender Bindestrich in $pfad (z.B. "-fileee", Präfix von "go-fileee/...") als
+    # Grep-Option interpretiert statt als literales Suchmuster — belegt live in dieser Umgebung
+    # (grep ist auf ugrep gemapped): "grep -F "-fileee"" bricht mit "grep: ileee: No such file or
+    # directory" ab (interpretiert als "-f ileee"), was via "|| true" zu einem FALSCHEN
+    # "keine Coverage-Daten" führt, obwohl der Substring real im Profil vorhanden ist.
+    treffer=$(printf '%s\n' "$func_output" | grep -F -- "$pfad" || true)
 
     if [[ -z "$treffer" ]]; then
         echo "FAIL: $pfad — keine Coverage-Daten (Datei im Profil nicht gefunden?)" >&2
