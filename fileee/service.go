@@ -65,6 +65,50 @@ func (s *restService[T]) Query(ctx context.Context, opts QueryOptions) (*QueryRe
 	return &QueryResult[T]{Rows: rows, TotalRows: wire.TotalRows}, nil
 }
 
+// idQueryResult ist das Ergebnis einer onlyIds-Query: reine Entity-IDs statt voller Objekte.
+type idQueryResult struct {
+	IDs       []string
+	TotalRows int
+}
+
+// queryIDs führt eine Query mit onlyIds=true aus und dekodiert die Zeilen als ID-Strings — bei
+// onlyIds liefert der Server pro Zeile einen String, kein T-Objekt (live belegt, u. a. Volltextsuche).
+func (s *restService[T]) queryIDs(ctx context.Context, opts QueryOptions) (*idQueryResult, error) {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return nil, err
+	}
+	opts.OnlyIDs = true
+	body, err := json.Marshal(opts.toWire())
+	if err != nil {
+		return nil, fmt.Errorf("fileee: queryIDs request encode: %w", err)
+	}
+	resp, err := s.client.postJSON(ctx, "/api/"+s.resourcePath+"/rest/query", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: queryIDs response read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseAPIError(resp.StatusCode, respBody)
+	}
+	var wire queryResultWire
+	if err := json.Unmarshal(respBody, &wire); err != nil {
+		return nil, fmt.Errorf("fileee: queryIDs response decode: %w", err)
+	}
+	ids := make([]string, 0, len(wire.Rows))
+	for _, raw := range wire.Rows {
+		var id string
+		if err := json.Unmarshal(raw, &id); err != nil {
+			return nil, fmt.Errorf("fileee: queryIDs row decode: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return &idQueryResult{IDs: ids, TotalRows: wire.TotalRows}, nil
+}
+
 func (s *restService[T]) Diff(ctx context.Context, cursor Cursor) (*DiffResult[T], error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err

@@ -29,11 +29,19 @@ type QueryOptions struct {
 
 // Criterion ist eine typisierte Filterbedingung; Field ist eine EntityField-Konstante
 // (z.B. "DocumentField:DOCUMENT_INFORMATION__ISREAD", API.md §3.3).
+//
+// FieldType/ValueType sind OPTIONALE Overrides für den serializeInformation.type-Diskriminator von
+// field bzw. value. Ohne Override wird für BEIDE der aus dem Go-Wert abgeleitete Typ genutzt
+// (Rückwärtskompatibilität). Sie sind nötig, wenn field- und value-Typ auseinanderfallen — live
+// belegt bei der Volltextsuche: field `DocumentQueries:FULLTEXT` hat type `Enum`, der Suchbegriff
+// (value) type `String` (siehe Skill fileee troubleshooting, „Volltextsuche").
 type Criterion struct {
-	Field    string
-	Operator Operator
-	Value    any
-	Optional bool
+	Field     string
+	Operator  Operator
+	Value     any
+	Optional  bool
+	FieldType string // optional; leer = abgeleiteter Typ
+	ValueType string // optional; leer = abgeleiteter Typ
 }
 
 // SortField steuert die Sortierung (API.md §3.2).
@@ -120,12 +128,20 @@ func (o QueryOptions) toWire() queryRequestWire {
 		w.Limit = defaultPageLimit
 	}
 	for _, c := range o.Criteria {
-		typ := serializeInformationType(c.Value)
+		derived := serializeInformationType(c.Value)
+		fieldType := derived
+		if c.FieldType != "" {
+			fieldType = c.FieldType
+		}
+		valueType := derived
+		if c.ValueType != "" {
+			valueType = c.ValueType
+		}
 		w.Criteria = append(w.Criteria, criterionWire{
-			Field:    criterionFieldWire{Value: c.Field, SerializeInformation: serializeInfoWire{Type: typ}},
+			Field:    criterionFieldWire{Value: c.Field, SerializeInformation: serializeInfoWire{Type: fieldType}},
 			Operator: c.Operator,
 			Optional: c.Optional,
-			Value:    criterionValueWire{Value: c.Value, SerializeInformation: serializeInfoWire{Type: typ}},
+			Value:    criterionValueWire{Value: c.Value, SerializeInformation: serializeInfoWire{Type: valueType}},
 		})
 	}
 	for _, s := range o.SortOrder {
