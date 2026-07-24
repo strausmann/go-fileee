@@ -43,7 +43,8 @@ func NewServer(cfg Config, fc *fileee.Client, sc *fileee.ShareClient, log *slog.
 // Stammdaten, siehe registerDocumentRoutes/registerEntityRoutes; Task 9: anonymer Share-Proxy
 // über s.sc, siehe registerShareProxyRoutes; Task 10: Unified Resolver POST /v1/resolve, siehe
 // registerResolveRoute; Task 11: Konversationen/Chat/Einladungen, siehe
-// registerConversationRoutes) sowie einer eigenen /healthz-Liveness-Route,
+// registerConversationRoutes; Task 12: bedingte Hard-DELETE-Routen hinter dem
+// Destruktiv-Gate, siehe registerDestructiveRoutes) sowie einer eigenen /healthz-Liveness-Route,
 // umschlossen von der Middleware-Kette AccessLog → APITokenAuth. Diese
 // Reihenfolge ist bewusst: AccessLog liegt AUSSERHALB von APITokenAuth, damit auch von der
 // Auth-Middleware abgelehnte Requests (401) im NGINX-Access-Log landen — CrowdSecs
@@ -65,6 +66,17 @@ func (s *Server) Handler() http.Handler {
 	s.registerShareProxyRoutes(api)
 	s.registerResolveRoute(api)
 	s.registerConversationRoutes(api)
+
+	// Task 12 (Destruktiv-Gate, ADR-0007/ADR-0008): die drei echten Hard-DELETE-Routen
+	// (DELETE /v1/documents|contacts|reminders/{id}, handlers_destructive.go) werden NUR
+	// registriert, wenn der Operator sie beim Start explizit freigeschaltet hat
+	// (FILEEE_ALLOW_DESTRUCTIVE=true, Config.AllowDestructive). Bleibt das Flag false, wird
+	// registerDestructiveRoutes gar nicht erst aufgerufen — die Pfade sind dem mux dann für das
+	// DELETE-Verb komplett unbekannt (kein register-then-403-Zwischenzustand, siehe
+	// registerDestructiveRoutes-Doku).
+	if s.cfg.AllowDestructive {
+		s.registerDestructiveRoutes(api)
+	}
 
 	// uploadSizeLimit deckelt POST /v1/documents auf cfg.MaxUploadBytes (handlers_documents.go) —
 	// Huma wendet op.MaxBodyBytes NUR auf den regulären (Nicht-Multipart) Body-Lesepfad an

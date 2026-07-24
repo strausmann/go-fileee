@@ -176,11 +176,24 @@ func newTestServer(t *testing.T, routes map[string]mockRoute) (*Server, *httptes
 func newTestServerWithConfig(t *testing.T, cfg Config, routes map[string]mockRoute) (*Server, *httptest.Server) {
 	t.Helper()
 
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return newTestServerWithConfigAndLog(t, cfg, routes, log)
+}
+
+// newTestServerWithConfigAndLog ist wie newTestServerWithConfig, erlaubt zusätzlich aber einen
+// eigenen *slog.Logger zu injizieren, statt ihn (wie newTestServerWithConfig) fest auf io.Discard
+// zu verdrahten — gebraucht von den Destruktiv-Gate-Audit-Log-Tests (Task 12), die die
+// Audit-Log-Zeile in einem *bytes.Buffer statt im Nirwana nachweisen müssen.
+// newTestServerWithConfig delegiert an diese Funktion, damit die 68+ bestehenden Aufrufstellen von
+// newTestServer/newTestServerWithConfig unverändert bleiben (kleinstmögliche Änderung am
+// Test-Harness statt einer Signaturänderung an einer breit genutzten Helper-Funktion).
+func newTestServerWithConfigAndLog(t *testing.T, cfg Config, routes map[string]mockRoute, log *slog.Logger) (*Server, *httptest.Server) {
+	t.Helper()
+
 	cfg.APIToken = testAPIToken
 	cfg.DocsPublic = true
 	cfg.ClientIPHeaders = defaultClientIPHeaders
 
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	fc, sc := newTestFileeeClient(t, routes)
 
 	s := NewServer(cfg, fc, sc, log)
@@ -2513,5 +2526,260 @@ func TestAcceptInvitation_BackendError(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// --- Task 12: Destruktiv-Gate (DELETE /v1/documents|contacts|reminders/{id}) ---
+//
+// newTestServer (Default-Config, AllowDestructive=false) deckt den Gate-OFF-Fall für alle drei
+// Ressourcen ab: registerDestructiveRoutes wird in Handler() (server.go) NUR im
+// `if s.cfg.AllowDestructive`-Zweig aufgerufen — bei false bleibt die DELETE-Route jeweils komplett
+// unregistriert, KEIN Handler läuft, KEIN expliziter 403 wird zurückgegeben.
+//
+// KORRIGIERT gegenüber der ursprünglichen Erwartung im Task-Brief ("→ 404"): live gegen den Test-
+// Harness verifiziert (TDD-RED-Lauf dieser Datei) liefert Go 1.22+ http.ServeMux für einen Pfad,
+// der UNTER ANDEREM HTTP-Verb bereits registriert ist (hier: GET/PUT /v1/documents/{id},
+// GET/PUT /v1/contacts/{id}, PUT /v1/reminders/{id} — alle aus Task 7/8), bei einem nicht
+// registrierten Verb auf demselben Pfad KEIN 404, sondern 405 Method Not Allowed (Go-1.22-
+// ServeMux-Doku: "if a request matches a pattern's path but not its method, ServeMux responds
+// with 405"). Das ist Standard-net/http-Verhalten (huma registriert nur via mux.HandleFunc
+// "METHODE /pfad"-Pattern, siehe adapters/humago) — KEIN Bug, sondern sogar korrekteres REST-
+// Verhalten als ein pauschales 404 (die Ressource existiert, nur nicht dieses Verb). Die
+// Design-Anforderung "route absent when disabled, kein register-then-403" bleibt erfüllt: es
+// registriert sich niemals ein DELETE-Handler, und kein Handler entscheidet zur Laufzeit über
+// 403 — die Ablehnung kommt ausschließlich aus der Pattern-Auflösung des Standard-Mux.
+func TestDeleteDocument_GateOff_NotRegistered(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/documents/doc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 405 (Gate OFF, DELETE nicht registriert), body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteContact_GateOff_NotRegistered prüft denselben Gate-OFF-Fall für
+// DELETE /v1/contacts/{id} (siehe Begründung bei TestDeleteDocument_GateOff_NotRegistered).
+func TestDeleteContact_GateOff_NotRegistered(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/contacts/contact-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/contacts/contact-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 405 (Gate OFF, DELETE nicht registriert), body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteReminder_GateOff_NotRegistered prüft denselben Gate-OFF-Fall für
+// DELETE /v1/reminders/{id} (siehe Begründung bei TestDeleteDocument_GateOff_NotRegistered).
+func TestDeleteReminder_GateOff_NotRegistered(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/reminders/rem-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/reminders/rem-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 405 (Gate OFF, DELETE nicht registriert), body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteDocument_GateOn_Success prüft den Happy-Path von DELETE /v1/documents/{id} bei
+// AllowDestructive=true: 204, dünner Durchgriff auf Documents.Delete.
+func TestDeleteDocument_GateOn_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/documents/rest/doc-1": {Status: http.StatusNoContent},
+	}
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/documents/doc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteDocument_GateOn_BackendNotFound prüft den Fehlerpfad von DELETE /v1/documents/{id}:
+// ein 404 vom Fileee-Backend wird über mapError auf {error:"resource not found",code:"not_found"}
+// mit HTTP 404 abgebildet (fileee.ErrNotFound via APIError.Is, siehe errors.go mapError).
+func TestDeleteDocument_GateOn_BackendNotFound(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/documents/rest/doc-missing": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"document not found"}`),
+		},
+	}
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/documents/doc-missing", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/documents/doc-missing: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteContact_GateOn_Success prüft den Happy-Path von DELETE /v1/contacts/{id} bei
+// AllowDestructive=true: 204, dünner Durchgriff auf Contacts.Delete.
+func TestDeleteContact_GateOn_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/contacts/rest/contact-1": {Status: http.StatusNoContent},
+	}
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/contacts/contact-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/contacts/contact-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteContact_GateOn_BackendNotFound prüft den Fehlerpfad von DELETE /v1/contacts/{id}.
+func TestDeleteContact_GateOn_BackendNotFound(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/contacts/rest/contact-missing": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"contact not found"}`),
+		},
+	}
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/contacts/contact-missing", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/contacts/contact-missing: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteReminder_GateOn_Success prüft den Happy-Path von DELETE /v1/reminders/{id} bei
+// AllowDestructive=true: 204, dünner Durchgriff auf Reminders.Delete.
+func TestDeleteReminder_GateOn_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/reminders/rest/rem-1": {Status: http.StatusNoContent},
+	}
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/reminders/rem-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/reminders/rem-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteReminder_GateOn_BackendNotFound prüft den Fehlerpfad von DELETE /v1/reminders/{id}.
+func TestDeleteReminder_GateOn_BackendNotFound(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/reminders/rest/rem-missing": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"reminder not found"}`),
+		},
+	}
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/reminders/rem-missing", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/reminders/rem-missing: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDeleteDocument_AuditLogWritten prüft, dass ein erfolgreicher Löschvorgang eine strukturierte
+// Audit-Log-Zeile über den injizierten *slog.Logger schreibt (op=delete, resource=document,
+// id=<gelöschte ID>) — Design-Spec §12 "jede ausgeführte Destruktiv-Op wird protokolliert". Der
+// Logger schreibt in einen *bytes.Buffer statt io.Discard (newTestServerWithConfigAndLog), damit
+// der Testfall den tatsächlichen Log-Inhalt nachweisen kann.
+func TestDeleteDocument_AuditLogWritten(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/documents/rest/doc-audit-1": {Status: http.StatusNoContent},
+	}
+	var logBuf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logBuf, nil))
+	cfg := Config{AllowDestructive: true}
+	_, ts := newTestServerWithConfigAndLog(t, cfg, routes, log)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/documents/doc-audit-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/documents/doc-audit-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+
+	logOutput := logBuf.String()
+	for _, want := range []string{"destruktive Operation", "op=delete", "resource=document", "id=doc-audit-1"} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("Audit-Log fehlt Bestandteil %q, log=%s", want, logOutput)
+		}
 	}
 }
