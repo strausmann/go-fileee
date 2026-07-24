@@ -31,9 +31,17 @@ type Conversation struct {
 
 // Message ist eine einzelne Nachricht einer Konversation. Type bestimmt die Bedeutung: CHAT
 // (Text in Text), DOCUMENT (geteiltes Dokument in DocumentID, Remove=true beim Entfernen),
-// PARTICIPANT_STATE (Teilnehmer beigetreten/entfernt), META_INFORMATION (System). Direction
-// FROM_USER = vom eigenen Konto gesendet, TO_USER = von einem anderen Teilnehmer empfangen (eine
-// Antwort). Raw enthält das vollständige Nachrichten-JSON.
+// PARTICIPANT_STATE (Teilnehmer beigetreten/entfernt), META_INFORMATION (System).
+//
+// ABSENDER-ZUORDNUNG (wichtig, um Verwechslungen zu vermeiden):
+//   - SenderID ist der ABSOLUTE Absender (eine userId oder companyId) — die Quelle der Wahrheit,
+//     WER gesendet hat, unabhängig davon, wer eingeloggt ist. Zum Anzeigen des Namens SenderID
+//     gegen Conversation.Participants (Participant.ID → Name) auflösen.
+//   - Direction ist RELATIV zum eingeloggten Konto: FROM_USER = das eingeloggte Konto hat gesendet,
+//     TO_USER = ein anderer hat gesendet (empfangen). Dieselbe Nachricht ist also für den einen
+//     Teilnehmer FROM_USER und für den anderen TO_USER — Direction sagt NICHT absolut, wer sendete.
+//
+// Raw enthält das vollständige Nachrichten-JSON.
 type Message struct {
 	ID         string          `json:"id"`
 	Direction  string          `json:"direction"`
@@ -59,8 +67,10 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// IsReply meldet, ob die Nachricht eine eingehende Text-Antwort eines anderen Teilnehmers ist
-// (Type CHAT, Direction TO_USER) — der typische Trigger für einen N8N-Workflow.
+// IsReply meldet, ob die Nachricht eine eingehende Text-Antwort ist — Type CHAT und Direction
+// TO_USER, also von einem ANDEREN Teilnehmer als dem eingeloggten Konto gesendet (relativ zum
+// eingeloggten Konto). Der typische Trigger für einen N8N-Workflow. Für die absolute Absender-
+// Identität SenderID verwenden.
 func (m Message) IsReply() bool { return m.Type == "CHAT" && m.Direction == "TO_USER" }
 
 // Participant ist ein Teilnehmer einer Konversation. Invited/Joined sind Booleans (LIVE verifiziert
@@ -108,9 +118,15 @@ type ConversationService interface {
 	// RemoveParticipant entfernt einen Teilnehmer (per ID) aus der Konversation.
 	RemoveParticipant(ctx context.Context, conversationID, participantID string) error
 	// PendingInvitations liefert die Konversationen mit einer offenen Einladung an das eigene Konto.
+	// LIVE verifiziert.
 	PendingInvitations(ctx context.Context) ([]Conversation, error)
-	// AcceptInvitation nimmt die Einladung zu einer Konversation an.
-	AcceptInvitation(ctx context.Context, conversationID string) error
+	// AcceptInvitation nimmt eine Einladung über ihren Invitation-Token an (POST
+	// /api/conversations/invitations/:token/accept). ACHTUNG: der Parameter ist NICHT die
+	// Conversation-ID (das quittiert der Server mit 404) — der Token stammt aus dem Einladungslink/
+	// der Einladungs-E-Mail. Wie der Token programmatisch aus einer offenen Einladung zu beziehen
+	// ist, ist noch nicht verifiziert (PendingInvitations liefert die Konversation, aber nicht den
+	// Token).
+	AcceptInvitation(ctx context.Context, invitationToken string) error
 }
 
 // Konversations-Rollen für AddParticipant.
