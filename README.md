@@ -1,5 +1,11 @@
 # go-fileee
 
+[![CI](https://github.com/strausmann/go-fileee/actions/workflows/test.yml/badge.svg)](https://github.com/strausmann/go-fileee/actions/workflows/test.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/strausmann/go-fileee/fileee.svg)](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee)
+[![Go Report Card](https://goreportcard.com/badge/github.com/strausmann/go-fileee)](https://goreportcard.com/report/github.com/strausmann/go-fileee)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/strausmann/go-fileee)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Eine **inoffizielle** Go-Client-Library für das **interne** Web-App-API von [Fileee](https://www.fileee.com) (`my.fileee.com`). Fileee bietet kein öffentliches API — diese Library kapselt das Protokoll, das die eigene Web-App verwendet, rekonstruiert aus mitgeschnittenem Netzwerk-Traffic eines eingeloggten eigenen Kontos.
 
 > **Status:** In Entwicklung — privat. Noch keine stabile Version, kein `v0`-Tag, API kann sich jederzeit ändern.
