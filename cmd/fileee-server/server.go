@@ -41,7 +41,8 @@ func NewServer(cfg Config, fc *fileee.Client, sc *fileee.ShareClient, log *slog.
 // registrierter Huma-API (OpenAPI 3.1 unter /openapi.json und /openapi.yaml, Docs-UI unter
 // /docs — siehe newAPI in api.go) samt Domänen-Operationen (Task 7: Dokumente/Seiten/OCR und
 // Stammdaten, siehe registerDocumentRoutes/registerEntityRoutes; Task 9: anonymer Share-Proxy
-// über s.sc, siehe registerShareProxyRoutes) sowie einer eigenen /healthz-Liveness-Route,
+// über s.sc, siehe registerShareProxyRoutes; Task 10: Unified Resolver POST /v1/resolve, siehe
+// registerResolveRoute) sowie einer eigenen /healthz-Liveness-Route,
 // umschlossen von der Middleware-Kette AccessLog → APITokenAuth. Diese
 // Reihenfolge ist bewusst: AccessLog liegt AUSSERHALB von APITokenAuth, damit auch von der
 // Auth-Middleware abgelehnte Requests (401) im NGINX-Access-Log landen — CrowdSecs
@@ -61,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerEntityRoutes(api)
 	s.registerShareRoutes(api)
 	s.registerShareProxyRoutes(api)
+	s.registerResolveRoute(api)
 
 	// uploadSizeLimit deckelt POST /v1/documents auf cfg.MaxUploadBytes (handlers_documents.go) —
 	// Huma wendet op.MaxBodyBytes NUR auf den regulären (Nicht-Multipart) Body-Lesepfad an

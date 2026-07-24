@@ -1589,3 +1589,221 @@ func TestDownloadSharedDocumentPDF_BackendErrorReturns404(t *testing.T) {
 		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task 10: Unified Resolver POST /v1/resolve
+// ---------------------------------------------------------------------------
+
+// resolveDocumentFixture ist die Mock-Fileee-Antwort für "GET /api/documents/rest/doc-1"
+// (Documents.Get): zwei Seiten (pg1, pg2) und typisierte Attribute (title/documentTypeId im
+// wrapper-Format {"value":...}, siehe fileee/types.go DocumentAttributes.UnmarshalJSON) — Grundlage
+// für TestResolve_InternalDocument_Success und TestResolve_IncludeOCR_InlinesTokens.
+const resolveDocumentFixture = `{"id":"doc-1","version":1,"status":"DONE",` +
+	`"pages":[{"id":"pg1","imageVersion":1,"contentVersion":1},{"id":"pg2","imageVersion":1,"contentVersion":1}],` +
+	`"attributes":{"data":{"title":{"value":"Rechnung Test"},"documentTypeId":{"value":"bill"}}}}`
+
+// TestResolve_InternalDocument_Success prüft den Brief-Pflichtfall für einen internen Link:
+// {"url":".../documents/doc-1"} löst über Documents.Get auf und liefert kind="internal" mit einem
+// downloadUrl, der auf /v1/documents/doc-1/pdf (dieser Server selbst) zeigt — NICHT auf Fileee.
+func TestResolve_InternalDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/documents/rest/doc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(resolveDocumentFixture),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"url":"https://my.fileee.com/documents/doc-1"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var got ResolvedDocument
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("Body als ResolvedDocument dekodieren: %v", err)
+	}
+	if got.Kind != "internal" {
+		t.Fatalf("Kind = %q, want %q", got.Kind, "internal")
+	}
+	if got.ID != "doc-1" {
+		t.Fatalf("ID = %q, want %q", got.ID, "doc-1")
+	}
+	if got.DownloadUrl != "/v1/documents/doc-1/pdf?mode=download" {
+		t.Fatalf("DownloadUrl = %q, want %q", got.DownloadUrl, "/v1/documents/doc-1/pdf?mode=download")
+	}
+	if got.OCRUrl != "/v1/pages/pg1/ocr" {
+		t.Fatalf("OCRUrl = %q, want %q", got.OCRUrl, "/v1/pages/pg1/ocr")
+	}
+	if len(got.PageIDs) != 2 || got.PageIDs[0] != "pg1" || got.PageIDs[1] != "pg2" {
+		t.Fatalf("PageIDs = %v, want [pg1 pg2]", got.PageIDs)
+	}
+	if got.Metadata.Title != "Rechnung Test" || got.Metadata.Type != "bill" {
+		t.Fatalf("Metadata = %+v, want Title=Rechnung Test Type=bill", got.Metadata)
+	}
+	if got.OCR != nil {
+		t.Fatalf("OCR = %+v, want nil (kein include=ocr gesetzt)", got.OCR)
+	}
+}
+
+// TestResolve_SharedLink_Success prüft den Brief-Pflichtfall für einen Share-Link:
+// {"url":".../shared/tok123"} löst anonym über ShareClient.Resolve auf und liefert kind="shared"
+// mit URLs, die auf die /v1/share-objects/{token}/…-Proxy-Routen DIESES Servers zeigen.
+func TestResolve_SharedLink_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/share-objects/tok123": {
+			Status: http.StatusOK,
+			Body: []byte(`{"id":"sh1","sharedBy":"Max Mustermann","sharedById":"u1",` +
+				`"created":"2026-07-24T00:00:00Z",` +
+				`"documents":[{"id":"doc1","title":"Rechnung","pageIds":["pg1"]}]}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"url":"https://my.fileee.com/shared/tok123"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var got ResolvedDocument
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("Body als ResolvedDocument dekodieren: %v", err)
+	}
+	if got.Kind != "shared" {
+		t.Fatalf("Kind = %q, want %q", got.Kind, "shared")
+	}
+	if got.ID != "doc1" {
+		t.Fatalf("ID = %q, want %q", got.ID, "doc1")
+	}
+	if got.DownloadUrl != "/v1/share-objects/tok123/documents/doc1/pdf?mode=download" {
+		t.Fatalf("DownloadUrl = %q, want %q", got.DownloadUrl, "/v1/share-objects/tok123/documents/doc1/pdf?mode=download")
+	}
+	if got.OCRUrl != "/v1/share-objects/tok123/pages/pg1/ocr" {
+		t.Fatalf("OCRUrl = %q, want %q", got.OCRUrl, "/v1/share-objects/tok123/pages/pg1/ocr")
+	}
+	if got.Metadata.Title != "Rechnung" {
+		t.Fatalf("Metadata.Title = %q, want %q", got.Metadata.Title, "Rechnung")
+	}
+}
+
+// TestResolve_UnknownLink_Returns400 prüft den Brief-Pflichtfall "Müll-URL → 400": eine URL, die
+// weder auf .../documents/<id> noch auf .../shared/<token> passt, liefert LinkKindUnknown
+// (fileee.ParseDocumentLink) — der Handler antwortet mit 400, OHNE einen Fileee-Roundtrip
+// auszulösen (keine Mock-Route registriert, würde also mit 404 vom Mock-Mux scheitern, wenn der
+// Handler fälschlich doch einen Upstream-Call versuchte).
+func TestResolve_UnknownLink_Returns400(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+
+	body := `{"url":"https://example.com/nothing/here"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestResolve_IncludeOCR_InlinesTokens prüft "?include=ocr": zusätzlich zu den Basisfeldern lädt
+// der Handler die OCR-Tokens JEDER Seite (hier: pg1 und pg2) und bettet sie im Feld "ocr"
+// (pageId -> Tokens) ein, statt nur den Verweis ocrUrl zu liefern.
+func TestResolve_IncludeOCR_InlinesTokens(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/documents/rest/doc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(resolveDocumentFixture),
+		},
+		"GET /api/pages/pg1": {
+			Status: http.StatusOK,
+			Body:   []byte(`[{"text":"Hallo","webappId":"w1","left":1,"top":2,"right":3,"bottom":4,"width":2,"height":2}]`),
+		},
+		"GET /api/pages/pg2": {
+			Status: http.StatusOK,
+			Body:   []byte(`[{"text":"Welt","webappId":"w2","left":1,"top":2,"right":3,"bottom":4,"width":2,"height":2}]`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"url":"https://my.fileee.com/documents/doc-1"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve?include=ocr", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve?include=ocr: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var got ResolvedDocument
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("Body als ResolvedDocument dekodieren: %v", err)
+	}
+	if got.OCR == nil {
+		t.Fatalf("OCR = nil, want inline-Tokens (include=ocr gesetzt)")
+	}
+	pg1Toks, ok := got.OCR["pg1"]
+	if !ok || len(pg1Toks) != 1 || pg1Toks[0].Text != "Hallo" {
+		t.Fatalf("OCR[pg1] = %+v, want ein Token mit Text=Hallo", pg1Toks)
+	}
+	pg2Toks, ok := got.OCR["pg2"]
+	if !ok || len(pg2Toks) != 1 || pg2Toks[0].Text != "Welt" {
+		t.Fatalf("OCR[pg2] = %+v, want ein Token mit Text=Welt", pg2Toks)
+	}
+}
+
+// TestResolve_InternalDocument_BackendErrorReturns404 prüft den Fehlerpfad: ein interner Link auf
+// eine Dokument-ID, die der Mock-Fileee mit 404 beantwortet (Documents.Get → fileee.ErrNotFound),
+// wird über mapError 1:1 auf den HTTP-Status der fileee-server-Antwort abgebildet (Design-Spec
+// §12 "sonstiger *fileee.APIError → dessen eigener HTTPStatus", hier der ErrNotFound-Sonderfall
+// → 404 "not_found").
+func TestResolve_InternalDocument_BackendErrorReturns404(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/documents/rest/doc-404": {
+			Status: http.StatusNotFound,
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"url":"https://my.fileee.com/documents/doc-404"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
