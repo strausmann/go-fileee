@@ -314,8 +314,34 @@ func (a *authClient) logout(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fileee: logout: %w", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
+	// POST /api/f/logout widerruft das JSESSIONID-JWT serverseitig (live verifiziert 2026-07-24:
+	// das alte Token liefert danach `authorized:false`). Den In-Memory-Jar zusätzlich leeren, sonst
+	// trägt ein späteres reauthenticate das tote rememberMe-Cookie mit und versucht erst einen
+	// sinnlosen token/login. Store-Reset unabhängig vom Jar-Clear durchführen.
+	a.clearJar()
 	return a.store.Save(ctx, &Session{})
+}
+
+// clearJar entfernt alle Cookies der Basis-URL aus dem In-Memory-Cookie-Jar (Expiry in der
+// Vergangenheit / MaxAge<0 → net/http/cookiejar löscht sie).
+func (a *authClient) clearJar() {
+	if a.hc.Jar == nil {
+		return
+	}
+	u, err := url.Parse(a.baseURL)
+	if err != nil {
+		return
+	}
+	current := a.hc.Jar.Cookies(u)
+	if len(current) == 0 {
+		return
+	}
+	expired := make([]*http.Cookie, 0, len(current))
+	for _, c := range current {
+		expired = append(expired, &http.Cookie{Name: c.Name, Value: "", Path: "/", MaxAge: -1})
+	}
+	a.hc.Jar.SetCookies(u, expired)
 }
 
 // accountStatusWire ist die Wire-Form von GET /api/f/account-status (API.md §2.9). toDomain()
