@@ -3,6 +3,7 @@ package fileee
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -307,6 +308,45 @@ func (a *authClient) ensureSession(ctx context.Context, force bool) error {
 	}
 	a.markFresh()
 	return nil
+}
+
+// UserID liefert die eigene Fileee-User-ID der aktiven Session — bevorzugt aus dem `userId`-Cookie,
+// sonst aus dem `sub`-Claim des JSESSIONID-JWT (ohne Signaturprüfung; die Session gilt bereits als
+// vertrauenswürdig). Wird u. a. für den senderId beim Senden von Chat-Nachrichten gebraucht.
+func (c *Client) UserID(ctx context.Context) (string, error) {
+	if err := c.EnsureSession(ctx); err != nil {
+		return "", err
+	}
+	if id := c.auth.cookieValue("userId"); id != "" {
+		return id, nil
+	}
+	if sub := jwtSub(c.auth.cookieValue("JSESSIONID")); sub != "" {
+		return sub, nil
+	}
+	return "", errors.New("fileee: user id not available in session")
+}
+
+// jwtSub extrahiert den sub-Claim aus einem (evtl. "jwt "-präfixierten) JWT, ohne die Signatur zu
+// prüfen. Leerer Rückgabewert, wenn das Token nicht dekodierbar ist.
+func jwtSub(raw string) string {
+	raw = strings.TrimPrefix(raw, "jwt ")
+	parts := strings.Split(raw, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		if payload, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
+			return ""
+		}
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	return claims.Sub
 }
 
 // tokenLogin ist der bevorzugte headless-Re-Auth-Pfad über das rememberMe-JWT-Cookie
