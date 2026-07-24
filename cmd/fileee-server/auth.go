@@ -56,7 +56,17 @@ func presentedToken(r *http.Request) string {
 // zusätzlicher eigener Early-Return nötig) — ein separater manueller Längenvergleich davor
 // würde nur denselben ohnehin in ConstantTimeCompare enthaltenen Kurzschluss duplizieren, ohne
 // zusätzliche Sicherheit zu bringen.
+//
+// Ausnahme davon ist ein leerer konfigurierter Token (want == ""): ConstantTimeCompare liefert
+// für zwei leere Byte-Slices 1 (Match), was ohne diesen Guard bei einer Fehlkonfiguration
+// (Middleware mit token == "" aufgesetzt) UND fehlendem/leerem Client-Header zu einem
+// stillschweigenden Fail-Open (kompletter Auth-Bypass) führen würde. Die Middleware ist die
+// Sicherheitsgrenze und muss unabhängig von Aufrufer-Fehlkonfiguration fail-closed bleiben —
+// deshalb wird ein leerer want-Wert vor dem eigentlichen Vergleich explizit abgelehnt.
 func tokenMatches(want, got string) bool {
+	if want == "" {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }
 

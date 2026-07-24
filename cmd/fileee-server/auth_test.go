@@ -139,3 +139,51 @@ func TestAPITokenAuth_DifferentLengthTokens(t *testing.T) {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
+
+// TestAPITokenAuth_EmptyConfiguredToken_NoHeader prüft die Sicherheitslücke aus dem
+// Critical-Review-Finding: Ist die Middleware mit einem leeren konfigurierten Token
+// (token == "") aufgesetzt — z. B. durch eine Fehlkonfiguration des Aufrufers — und der Client
+// sendet KEINEN X-API-Key/Authorization-Header, MUSS die Middleware trotzdem mit 401
+// antworten und next NICHT aufrufen. Ohne Fix liefert subtle.ConstantTimeCompare("", "") == 1
+// und die Auth-Prüfung wird für JEDEN Request stillschweigend umgangen (Fail-Open statt
+// Fail-Closed).
+func TestAPITokenAuth_EmptyConfiguredToken_NoHeader(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+	r := httptest.NewRequest("GET", "/v1/documents", nil)
+	w := httptest.NewRecorder()
+
+	APITokenAuth("", noExempt, next).ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (leerer konfigurierter Token muss fail-closed sein)", w.Code)
+	}
+	if called {
+		t.Fatal("next wurde trotz leerem konfiguriertem Token und fehlendem Header aufgerufen — Auth-Bypass")
+	}
+}
+
+// TestAPITokenAuth_EmptyConfiguredToken_EmptyHeader prüft dieselbe Fail-Closed-Anforderung für
+// den Fall, dass der Client explizit einen leeren X-API-Key-Header mitschickt (statt den Header
+// ganz wegzulassen). Auch hier darf ein leerer konfigurierter Token niemals zu einem
+// erfolgreichen Auth-Match führen.
+func TestAPITokenAuth_EmptyConfiguredToken_EmptyHeader(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+	r := httptest.NewRequest("GET", "/v1/documents", nil)
+	r.Header.Set("X-API-Key", "")
+	w := httptest.NewRecorder()
+
+	APITokenAuth("", noExempt, next).ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (leerer konfigurierter Token muss fail-closed sein)", w.Code)
+	}
+	if called {
+		t.Fatal("next wurde trotz leerem konfiguriertem Token und leerem X-API-Key aufgerufen — Auth-Bypass")
+	}
+}
