@@ -1807,3 +1807,78 @@ func TestResolve_InternalDocument_BackendErrorReturns404(t *testing.T) {
 		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
 	}
 }
+
+// TestResolve_InternalDocument_ZeroPages_NoOCRUrl prüft den Guard in resolveInternal
+// (cmd/fileee-server/resolve.go: "if len(pageIDs) > 0 { ocrURL = ... }"): ein Dokument OHNE Seiten
+// (leere "pages"-Liste in der Documents.Get-Antwort) darf NICHT versuchen, pageIDs[0] zu indizieren
+// (das würde ohne den Guard mit index-out-of-range panicen) — stattdessen bleibt OCRUrl leer und die
+// Antwort liefert trotzdem 200 mit kind="internal" und einer leeren PageIDs-Liste.
+func TestResolve_InternalDocument_ZeroPages_NoOCRUrl(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/documents/rest/doc-nopages": {
+			Status: http.StatusOK,
+			Body: []byte(`{"id":"doc-nopages","version":1,"status":"DONE","pages":[],` +
+				`"attributes":{"data":{"title":{"value":"Ohne Seiten"}}}}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"url":"https://my.fileee.com/documents/doc-nopages"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var got ResolvedDocument
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("Body als ResolvedDocument dekodieren: %v", err)
+	}
+	if got.Kind != "internal" {
+		t.Fatalf("Kind = %q, want %q", got.Kind, "internal")
+	}
+	if len(got.PageIDs) != 0 {
+		t.Fatalf("PageIDs = %v, want leer (Dokument ohne Seiten)", got.PageIDs)
+	}
+	if got.OCRUrl != "" {
+		t.Fatalf("OCRUrl = %q, want leer (Guard len(pageIDs) > 0 greift nicht)", got.OCRUrl)
+	}
+}
+
+// TestResolve_SharedDocument_ZeroDocuments_Returns404 prüft den Guard in resolveShared
+// (cmd/fileee-server/resolve.go: "if len(obj.Documents) == 0 { return 404 }"): eine Freigabe, deren
+// ShareClient.Resolve-Antwort eine LEERE documents-Liste enthält, darf NICHT versuchen,
+// obj.Documents[0] zu indizieren (Panic-Kandidat ohne den Guard) — stattdessen liefert der Handler
+// den in resolve.go dokumentierten Status 404 ("not_found").
+func TestResolve_SharedDocument_ZeroDocuments_Returns404(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/share-objects/tok-empty": {
+			Status: http.StatusOK,
+			Body: []byte(`{"id":"sh-empty","sharedBy":"Max Mustermann","sharedById":"u1",` +
+				`"created":"2026-07-24T00:00:00Z","documents":[]}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"url":"https://my.fileee.com/shared/tok-empty"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/resolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/resolve: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
