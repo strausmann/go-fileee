@@ -30,17 +30,24 @@ type mockRoute struct {
 	Status int
 	// Body ist der rohe Response-Body (i.d.R. JSON). Leer = kein Body geschrieben.
 	Body []byte
+	// ContentType überschreibt den automatisch gesetzten "application/json"-Header (nur gesetzt,
+	// wenn Body nicht leer ist) — gebraucht für Task-9-Fixtures, deren Body kein JSON ist (z. B.
+	// "image/jpeg" für ein Seitenbild, "application/pdf" für ein Voll-PDF). Leer = Auto-Verhalten
+	// wie bisher (application/json bei nicht-leerem Body, sonst kein Header).
+	ContentType string
 }
 
-// newTestFileeeClient baut einen *fileee.Client, der gegen einen httptest-Mock-Server verdrahtet
-// ist — die Lib-eigenen `package fileee`-Test-Helfer (newMockServer/jsonHandler,
-// mockserver_test.go) sind unexportiert und aus `package main` heraus nicht erreichbar; dieser
-// Helfer nutzt deshalb ausschließlich exportierte Symbole (fileee.New, fileee.WithBaseURL,
-// fileee.WithSessionStore, fileee.NewFileSessionStore). routes bildet zusätzliche
-// "METHODE /pfad"-Kombinationen auf dem Lib-Upstream (z.B. "GET /api/documents/rest/doc-1") auf
-// Fixture-Antworten ab — Task 6 brauchte dafür noch nichts (nur /healthz, OpenAPI,
-// Auth-Exempt-Logik, keine Domänen-Routen); Task-7-Handler rufen dagegen tatsächlich
-// Lib-Methoden auf, die Upstream-Requests auslösen.
+// newTestFileeeClient baut EINEN gemeinsamen httptest-Mock-Server und darauf verdrahtet sowohl
+// einen *fileee.Client (fc) als auch einen credential-losen *fileee.ShareClient (sc, Task 9) — die
+// Lib-eigenen `package fileee`-Test-Helfer (newMockServer/jsonHandler, mockserver_test.go) sind
+// unexportiert und aus `package main` heraus nicht erreichbar; dieser Helfer nutzt deshalb
+// ausschließlich exportierte Symbole (fileee.New, fileee.NewShareClient, fileee.WithBaseURL,
+// fileee.WithStaticBaseURL, fileee.WithSessionStore, fileee.NewFileSessionStore,
+// fileee.WithRateLimit). routes bildet zusätzliche "METHODE /pfad"-Kombinationen auf dem
+// Lib-Upstream (z.B. "GET /api/documents/rest/doc-1", oder ein Go-1.22+-Wildcard-Pattern wie
+// "POST /api/share-objects/{token}") auf Fixture-Antworten ab — Task 6 brauchte dafür noch nichts
+// (nur /healthz, OpenAPI, Auth-Exempt-Logik, keine Domänen-Routen); Task-7/9-Handler rufen dagegen
+// tatsächlich Lib-Methoden auf, die Upstream-Requests auslösen.
 //
 // EnsureSession-Kurzschluss (fileee/auth.go, ensureSession): die Route "GET /api/f/user-session"
 // wird HIER fest verdrahtet und liefert immer {"authorized":true,"secondsBlocked":0}. Kombiniert
@@ -51,7 +58,14 @@ type mockRoute struct {
 // fileee/auth.go ensureSession: nur bei FEHLENDER/leerer gespeicherter Session oder nicht
 // autorisiertem user-session-Ergebnis wird reauthenticate aufgerufen). Ein echter
 // Fileee-Login-Roundtrip findet in keinem Handler-Test statt.
-func newTestFileeeClient(t *testing.T, routes map[string]mockRoute) *fileee.Client {
+//
+// ShareClient braucht KEINE Session (credential-los, fileee/shareclient.go) — die einzige von ihm
+// benötigte feste Route ist "GET /api/f/start" (ensureXSRF holt darüber ein XSRF-Cookie; der
+// zurückgegebene Status/Body ist dafür irrelevant, ensureXSRF prüft nur, dass der Roundtrip ohne
+// Transport-Fehler durchläuft). sc zeigt mit BEIDEN Basis-URLs (baseURL UND staticBaseURL) auf
+// DENSELBEN mockSrv — analog zu fileee.shareMockServer (fileee/shareclient_test.go), das ebenfalls
+// einen einzigen Mock-Host für API- und Static-Pfad verwendet.
+func newTestFileeeClient(t *testing.T, routes map[string]mockRoute) (*fileee.Client, *fileee.ShareClient) {
 	t.Helper()
 
 	mux := http.NewServeMux()
@@ -60,11 +74,18 @@ func newTestFileeeClient(t *testing.T, routes map[string]mockRoute) *fileee.Clie
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"authorized":true,"secondsBlocked":0}`))
 	})
+	mux.HandleFunc("GET /api/f/start", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	for pattern, route := range routes {
 		route := route
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			if len(route.Body) > 0 {
-				w.Header().Set("Content-Type", "application/json")
+			ct := route.ContentType
+			if ct == "" && len(route.Body) > 0 {
+				ct = "application/json"
+			}
+			if ct != "" {
+				w.Header().Set("Content-Type", ct)
 			}
 			w.WriteHeader(route.Status)
 			if len(route.Body) > 0 {
@@ -91,7 +112,13 @@ func newTestFileeeClient(t *testing.T, routes map[string]mockRoute) *fileee.Clie
 	if err != nil {
 		t.Fatalf("fileee.New: %v", err)
 	}
-	return fc
+
+	sc := fileee.NewShareClient(
+		fileee.WithBaseURL(mockSrv.URL), fileee.WithStaticBaseURL(mockSrv.URL),
+		fileee.WithRateLimit(1000, 1000),
+	)
+
+	return fc, sc
 }
 
 // newTestServer baut einen einsatzbereiten *Server (fester API-Token testAPIToken,
@@ -109,9 +136,9 @@ func newTestServer(t *testing.T, routes map[string]mockRoute) (*Server, *httptes
 		ClientIPHeaders: defaultClientIPHeaders,
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	fc := newTestFileeeClient(t, routes)
+	fc, sc := newTestFileeeClient(t, routes)
 
-	s := NewServer(cfg, fc, log)
+	s := NewServer(cfg, fc, sc, log)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -132,9 +159,9 @@ func newTestServerWithConfig(t *testing.T, cfg Config, routes map[string]mockRou
 	cfg.ClientIPHeaders = defaultClientIPHeaders
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	fc := newTestFileeeClient(t, routes)
+	fc, sc := newTestFileeeClient(t, routes)
 
-	s := NewServer(cfg, fc, log)
+	s := NewServer(cfg, fc, sc, log)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -265,8 +292,8 @@ func TestDocs_TokenRequiredWhenNotPublic(t *testing.T) {
 		ClientIPHeaders: defaultClientIPHeaders,
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	fc := newTestFileeeClient(t, nil)
-	s := NewServer(cfg, fc, log)
+	fc, sc := newTestFileeeClient(t, nil)
+	s := NewServer(cfg, fc, sc, log)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -460,10 +487,14 @@ func TestUploadDocument_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fileee.New: %v", err)
 	}
+	// sc wird von diesem Test nicht angesprochen (reiner Upload-Test) — trotzdem Pflichtfeld von
+	// NewServer, daher minimal gegen denselben Mock verdrahtet (kein /api/f/start-Handler nötig,
+	// da ensureXSRF hier nie aufgerufen wird).
+	sc := fileee.NewShareClient(fileee.WithBaseURL(mockSrv.URL))
 
 	cfg := Config{APIToken: testAPIToken, DocsPublic: true, ClientIPHeaders: defaultClientIPHeaders, MaxUploadBytes: 32 << 20}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s := NewServer(cfg, fc, log)
+	s := NewServer(cfg, fc, sc, log)
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 
@@ -1282,5 +1313,279 @@ func TestWaitProcess_InvalidTimeoutReturns400(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 9: Anonymer Share-Proxy (resolve/image/ocr/pdf über s.sc)
+// ---------------------------------------------------------------------------
+
+// TestResolveShare_Success prüft den Brief-Pflichtfall für POST /v1/share-objects/{token}: der
+// Mock-Fileee liefert unter dem von ShareClient.Resolve erwarteten Upstream-Pfad
+// ("POST /api/share-objects/tok123", fileee/shareclient.go) die aufgelöste Freigabe, der Handler
+// antwortet mit 200 und liefert sharedBy sowie die Dokumentliste unverändert im Body.
+func TestResolveShare_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/share-objects/tok123": {
+			Status: http.StatusOK,
+			Body: []byte(`{"id":"sh1","sharedBy":"Max Mustermann","sharedById":"u1",
+				"created":"2026-07-24T00:00:00Z",
+				"documents":[{"id":"doc1","title":"Rechnung","pageIds":["pg1","pg2"]}]}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/share-objects/tok123", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/share-objects/tok123: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+
+	var obj fileee.SharedObject
+	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
+		t.Fatalf("Body als fileee.SharedObject dekodieren: %v", err)
+	}
+	if obj.SharedBy != "Max Mustermann" || len(obj.Documents) != 1 || obj.Documents[0].Title != "Rechnung" {
+		t.Fatalf("obj = %+v, want SharedBy=Max Mustermann mit einem Dokument Title=Rechnung", obj)
+	}
+}
+
+// TestResolveShare_BackendErrorReturns404 prüft den Fehlerpfad von POST /v1/share-objects/{token}:
+// ein unbekannter/abgelaufener Token liefert vom Mock-Fileee 404, mapError übersetzt das
+// 1:1 in den HTTP-Status der fileee-server-Antwort (Spec §12 "sonstiger *fileee.APIError → dessen
+// eigener HTTPStatus").
+func TestResolveShare_BackendErrorReturns404(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/share-objects/tok-unknown": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown share token"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/share-objects/tok-unknown", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/share-objects/tok-unknown: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestDownloadSharedPageImage_Success prüft GET /v1/share-objects/{token}/pages/{pageId}/image:
+// ShareClient.DownloadPageImage braucht (anders als SharedPageOCR/DownloadSharedPDF) KEINEN
+// vorherigen Resolve-Aufruf — der Handler streamt direkt vom eigenen Token-Endpunkt
+// ("GET /api/v1/sharing/tok123/pg1", fileee/shareclient.go) auf den Huma-BodyWriter, ohne die
+// Bytes im RAM zu puffern (analog handleDownloadPageImage, handlers_documents.go).
+func TestDownloadSharedPageImage_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/v1/sharing/tok123/pg1": {
+			Status:      http.StatusOK,
+			Body:        []byte("JPEGDATA"),
+			ContentType: "image/jpeg",
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/share-objects/tok123/pages/pg1/image", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/share-objects/tok123/pages/pg1/image: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Body lesen: %v", err)
+	}
+	if string(body) != "JPEGDATA" {
+		t.Fatalf("body = %q, want %q", body, "JPEGDATA")
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/jpeg" {
+		t.Fatalf("Content-Type = %q, want image/jpeg", ct)
+	}
+}
+
+// sharedPageOCRMockServer baut einen Mock-Fileee-Server für den zweistufigen Ablauf von
+// GET /v1/share-objects/{token}/pages/{pageId}/ocr: der Handler MUSS zuerst per Resolve die
+// shareId/sharedById auflösen (fileee.SharedObject.ID/SharedByID), bevor er SharedPageOCR
+// aufrufen kann (fileee/ocr.go SharedPageOCR verlangt shareID/sharedByID als Parameter — anders
+// als DownloadPageImage kennt dieser Fileee-Endpunkt keinen direkten Token-Pfad). Die Mock-Route
+// für /api/pages/{pageId} prüft deshalb explizit, dass share_id/shared_by aus der VORHERIGEN
+// Resolve-Antwort ankommen — ein reiner mockRoute-Fixture-Eintrag könnte das nicht verifizieren.
+func sharedPageOCRMockServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/f/start", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /api/share-objects/tok123", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"sh1","sharedBy":"Max","sharedById":"u1","created":"2026-07-24T00:00:00Z","documents":[{"id":"doc1","title":"Rechnung","pageIds":["pg1"]}]}`))
+	})
+	mux.HandleFunc("GET /api/pages/pg1", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("share_id") != "sh1" || r.URL.Query().Get("shared_by") != "u1" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"text":"Hallo","webappId":"w1","left":1,"top":2,"right":3,"bottom":4,"width":2,"height":2}]`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestGetSharedPageOCR_Success prüft den Brief-Pflichtfall für
+// GET /v1/share-objects/{token}/pages/{pageId}/ocr: Resolve + SharedPageOCR liefern zusammen die
+// OCR-Tokenliste, der Handler antwortet mit 200 und der unveränderten Token-Liste im Body.
+func TestGetSharedPageOCR_Success(t *testing.T) {
+	srv := sharedPageOCRMockServer(t)
+	sc := fileee.NewShareClient(fileee.WithBaseURL(srv.URL), fileee.WithStaticBaseURL(srv.URL), fileee.WithRateLimit(1000, 1000))
+	fc, _ := newTestFileeeClient(t, nil)
+
+	cfg := Config{APIToken: testAPIToken, DocsPublic: true, ClientIPHeaders: defaultClientIPHeaders}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := NewServer(cfg, fc, sc, log)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/share-objects/tok123/pages/pg1/ocr", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/share-objects/tok123/pages/pg1/ocr: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var toks []fileee.OCRToken
+	if err := json.NewDecoder(resp.Body).Decode(&toks); err != nil {
+		t.Fatalf("Body als []OCRToken dekodieren: %v", err)
+	}
+	if len(toks) != 1 || toks[0].Text != "Hallo" {
+		t.Fatalf("toks = %+v, want ein Token mit Text=Hallo", toks)
+	}
+}
+
+// sharedPDFMockServer baut einen Mock-Fileee-Server für den zweistufigen Ablauf von
+// GET /v1/share-objects/{token}/documents/{docId}/pdf: der Handler löst den Token zuerst per
+// Resolve auf (shareId aus fileee.SharedObject.ID), bevor er DownloadSharedPDF gegen den
+// Static-Host aufruft (fileee/shareclient.go DownloadSharedPDF verlangt shareID, nicht token).
+// pdfStatus/pdfBody steuern die Antwort der PDF-Route — so kann derselbe Aufbau sowohl für den
+// Erfolgs- als auch für den Fehlerfall (TestDownloadSharedDocumentPDF_BackendErrorReturns404)
+// wiederverwendet werden.
+func sharedPDFMockServer(t *testing.T, pdfStatus int, pdfBody []byte) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/f/start", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /api/share-objects/tok123", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"sh1","sharedBy":"Max","sharedById":"u1","created":"2026-07-24T00:00:00Z","documents":[{"id":"doc1","title":"Rechnung","pageIds":["pg1"]}]}`))
+	})
+	mux.HandleFunc("GET /shares/get/sh1/doc1/pdf", func(w http.ResponseWriter, r *http.Request) {
+		if pdfStatus == http.StatusOK {
+			w.Header().Set("Content-Type", "application/pdf")
+		}
+		w.WriteHeader(pdfStatus)
+		if len(pdfBody) > 0 {
+			_, _ = w.Write(pdfBody)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newTestServerWithShareClient baut einen Server, dessen sc auf srv zeigt (baseURL UND
+// staticBaseURL, analog fileee.shareMockServer) — gemeinsamer Aufbau für die PDF-Tests unten.
+func newTestServerWithShareClient(t *testing.T, srv *httptest.Server) (*Server, *httptest.Server) {
+	t.Helper()
+	sc := fileee.NewShareClient(fileee.WithBaseURL(srv.URL), fileee.WithStaticBaseURL(srv.URL), fileee.WithRateLimit(1000, 1000))
+	fc, _ := newTestFileeeClient(t, nil)
+
+	cfg := Config{APIToken: testAPIToken, DocsPublic: true, ClientIPHeaders: defaultClientIPHeaders}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := NewServer(cfg, fc, sc, log)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return s, ts
+}
+
+// TestDownloadSharedDocumentPDF_Success prüft den Brief-Pflichtfall "PDF-Route streamt Bytes" für
+// GET /v1/share-objects/{token}/documents/{docId}/pdf: Resolve liefert die shareId, die PDF-Route
+// streamt die vom Static-Host gelieferten Bytes unverändert auf den Huma-BodyWriter.
+func TestDownloadSharedDocumentPDF_Success(t *testing.T) {
+	srv := sharedPDFMockServer(t, http.StatusOK, []byte("%PDF-1.7 fake"))
+	_, ts := newTestServerWithShareClient(t, srv)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/share-objects/tok123/documents/doc1/pdf", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/share-objects/tok123/documents/doc1/pdf: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Body lesen: %v", err)
+	}
+	if string(body) != "%PDF-1.7 fake" {
+		t.Fatalf("body = %q, want %q", body, "%PDF-1.7 fake")
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/pdf" {
+		t.Fatalf("Content-Type = %q, want application/pdf", ct)
+	}
+}
+
+// TestDownloadSharedDocumentPDF_BackendErrorReturns404 prüft den Brief-Pflichtfall "download 4xx →
+// gemappter Status": Resolve gelingt, aber die PDF-Route auf dem Static-Host meldet 404 (Dokument
+// zwischenzeitlich gelöscht/nicht mehr Teil der Freigabe) — mapError übersetzt das in denselben
+// HTTP-Status der fileee-server-Antwort.
+func TestDownloadSharedDocumentPDF_BackendErrorReturns404(t *testing.T) {
+	srv := sharedPDFMockServer(t, http.StatusNotFound, []byte(`{"apiError":"NOT_FOUND","errorMessage":"document not in share"}`))
+	_, ts := newTestServerWithShareClient(t, srv)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/share-objects/tok123/documents/doc1/pdf", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/share-objects/tok123/documents/doc1/pdf: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
 	}
 }

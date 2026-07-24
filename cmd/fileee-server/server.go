@@ -14,29 +14,35 @@ import (
 const version = "0.1.0"
 
 // Server bündelt die Laufzeitabhängigkeiten von fileee-server: die geladene Konfiguration, den
-// bereits gegen Fileee verdrahteten Core-Lib-Client und den strukturierten Logger. Server hält
-// darüber hinaus KEINEN eigenen Zustand — alle drei Felder werden einmalig in NewServer gesetzt
-// und danach nur gelesen, sodass ein *Server gefahrlos für die gesamte Prozesslaufzeit von
-// mehreren Requests gleichzeitig verwendet werden kann.
+// bereits gegen Fileee verdrahteten Core-Lib-Client, den credential-losen ShareClient für den
+// anonymen Share-Proxy (Task 9) und den strukturierten Logger. Server hält darüber hinaus KEINEN
+// eigenen Zustand — alle vier Felder werden einmalig in NewServer gesetzt und danach nur gelesen,
+// sodass ein *Server gefahrlos für die gesamte Prozesslaufzeit von mehreren Requests gleichzeitig
+// verwendet werden kann.
 type Server struct {
 	cfg Config
 	fc  *fileee.Client
+	sc  *fileee.ShareClient
 	log *slog.Logger
 }
 
-// NewServer baut einen Server aus der geladenen Konfiguration (LoadConfig, Task 1), einem
-// bereits gegen Fileee eingerichteten Core-Lib-Client (fileee.New, siehe main.go) und einem
-// strukturierten Logger. NewServer selbst führt keinen I/O aus (kein Login, kein
-// Datei-/Netzwerkzugriff) — das erledigt main.go beim Boot bzw. der Aufrufer der Fileee-Lib.
-func NewServer(cfg Config, fc *fileee.Client, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, fc: fc, log: log}
+// NewServer baut einen Server aus der geladenen Konfiguration (LoadConfig, Task 1), einem bereits
+// gegen Fileee eingerichteten Core-Lib-Client (fileee.New, siehe main.go), einem ebenfalls bereits
+// eingerichteten, credential-losen ShareClient (fileee.NewShareClient, siehe main.go) und einem
+// strukturierten Logger. sc wird bewusst — analog zu fc — von AUSSEN injiziert statt intern in
+// NewServer gebaut: das hält NewServer frei von I/O (kein Login, kein Datei-/Netzwerkzugriff) und
+// erlaubt Tests, sc gegen einen eigenen httptest-Mock zu verdrahten (siehe newTestFileeeClient in
+// handlers_test.go).
+func NewServer(cfg Config, fc *fileee.Client, sc *fileee.ShareClient, log *slog.Logger) *Server {
+	return &Server{cfg: cfg, fc: fc, sc: sc, log: log}
 }
 
 // Handler baut den vollständigen HTTP-Handler von fileee-server: einen http.ServeMux mit
 // registrierter Huma-API (OpenAPI 3.1 unter /openapi.json und /openapi.yaml, Docs-UI unter
 // /docs — siehe newAPI in api.go) samt Domänen-Operationen (Task 7: Dokumente/Seiten/OCR und
-// Stammdaten, siehe registerDocumentRoutes/registerEntityRoutes) sowie einer eigenen
-// /healthz-Liveness-Route, umschlossen von der Middleware-Kette AccessLog → APITokenAuth. Diese
+// Stammdaten, siehe registerDocumentRoutes/registerEntityRoutes; Task 9: anonymer Share-Proxy
+// über s.sc, siehe registerShareProxyRoutes) sowie einer eigenen /healthz-Liveness-Route,
+// umschlossen von der Middleware-Kette AccessLog → APITokenAuth. Diese
 // Reihenfolge ist bewusst: AccessLog liegt AUSSERHALB von APITokenAuth, damit auch von der
 // Auth-Middleware abgelehnte Requests (401) im NGINX-Access-Log landen — CrowdSecs
 // http-bruteforce-Szenario wertet genau diese Zeilen aus (siehe accesslog.go-Doku). Das
@@ -54,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerDocumentRoutes(api)
 	s.registerEntityRoutes(api)
 	s.registerShareRoutes(api)
+	s.registerShareProxyRoutes(api)
 
 	// uploadSizeLimit deckelt POST /v1/documents auf cfg.MaxUploadBytes (handlers_documents.go) —
 	// Huma wendet op.MaxBodyBytes NUR auf den regulären (Nicht-Multipart) Body-Lesepfad an

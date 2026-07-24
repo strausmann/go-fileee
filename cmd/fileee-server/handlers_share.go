@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -154,4 +155,172 @@ func (s *Server) handleWaitProcess(ctx context.Context, in *waitProcessInput) (*
 		return nil, mapError(err)
 	}
 	return &processOutput{Body: *proc}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Task 9: Anonymer Share-Proxy
+// ---------------------------------------------------------------------------
+
+// registerShareProxyRoutes registriert die anonymen, credential-losen Share-Proxy-Operationen
+// (Task 9, Design-Spec §4.1 Share-Proxy-Routen, docs/superpowers/specs/2026-07-24-fileee-server-design.md
+// im homelab-management-Repo): einen Empfänger, der nur den Freigabe-Token besitzt (z. B. ein N8N-
+// Workflow), kann damit den Token auflösen sowie Seitenbild, OCR-Tokens und das Voll-PDF eines
+// geteilten Dokuments abrufen — OHNE einen Fileee-Login. Jeder Handler delegiert direkt an s.sc
+// (den credential-losen fileee.ShareClient, siehe server.go) statt an s.fc, und übersetzt
+// Lib-Fehler ausschließlich über mapError (errors.go) — dieselbe Fehler-Übersetzung wie bei den
+// authentifizierten Routen, da fileee.ShareClient dieselben Sentinel-Fehler/*fileee.APIError
+// zurückgibt wie fileee.Client (fileee/errors.go gilt paketweit, nicht clientspezifisch).
+//
+// Zwei der vier Operationen (OCR, PDF) brauchen intern EINEN zusätzlichen Resolve-Aufruf: Anders
+// als DownloadPageImage (das einen eigenen Token-Endpunkt kennt, "GET /api/v1/sharing/:token/:pageId")
+// verlangen SharedPageOCR und DownloadSharedPDF die shareId/sharedById aus der Resolve-Antwort
+// (fileee.SharedObject.ID/SharedByID) statt des rohen Tokens — das ist eine Eigenheit der
+// zugrunde liegenden Fileee-API (fileee/shareclient.go-Doku), kein Design dieses Servers.
+func (s *Server) registerShareProxyRoutes(api huma.API) {
+	huma.Register(api, huma.Operation{
+		OperationID: "resolve-share",
+		Method:      http.MethodPost,
+		Path:        "/v1/share-objects/{token}",
+		Summary:     "Freigabe-Token auflösen (anonym, ohne Fileee-Login)",
+	}, s.handleResolveShare)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "download-shared-page-image",
+		Method:      http.MethodGet,
+		Path:        "/v1/share-objects/{token}/pages/{pageId}/image",
+		Summary:     "Seitenbild eines geteilten Dokuments herunterladen (anonym, Stream)",
+	}, s.handleDownloadSharedPageImage)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-shared-page-ocr",
+		Method:      http.MethodGet,
+		Path:        "/v1/share-objects/{token}/pages/{pageId}/ocr",
+		Summary:     "OCR-Tokens einer Seite eines geteilten Dokuments laden (anonym)",
+	}, s.handleGetSharedPageOCR)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "download-shared-document-pdf",
+		Method:      http.MethodGet,
+		Path:        "/v1/share-objects/{token}/documents/{docId}/pdf",
+		Summary:     "Voll-PDF eines geteilten Dokuments herunterladen (anonym, vom Static-Host, Stream)",
+	}, s.handleDownloadSharedDocumentPDF)
+}
+
+// resolveShareInput steuert POST /v1/share-objects/{token}.
+type resolveShareInput struct {
+	Token string `path:"token" doc:"Freigabe-Token (aus dem Share-Link, z. B. https://my.fileee.com/shared/<token>)."`
+}
+
+// resolveShareOutput ist der Response-Body von POST /v1/share-objects/{token}: fileee.SharedObject
+// trägt bereits die vom Design-Spec geforderten Felder (sharedBy/sharedById/documents,
+// fileee/shareclient.go) — kein eigenes Wire-Mapping nötig.
+type resolveShareOutput struct {
+	Body fileee.SharedObject
+}
+
+// handleResolveShare implementiert POST /v1/share-objects/{token} — dünner Durchgriff auf
+// ShareClient.Resolve. Kein Fileee-Login nötig: der Handler nutzt s.sc statt s.fc.
+func (s *Server) handleResolveShare(ctx context.Context, in *resolveShareInput) (*resolveShareOutput, error) {
+	obj, err := s.sc.Resolve(ctx, in.Token)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &resolveShareOutput{Body: *obj}, nil
+}
+
+// downloadSharedPageImageInput steuert GET /v1/share-objects/{token}/pages/{pageId}/image.
+type downloadSharedPageImageInput struct {
+	Token  string           `path:"token" doc:"Freigabe-Token."`
+	PageID string           `path:"pageId" doc:"Seiten-ID (aus SharedDocument.PageIDs einer vorherigen Resolve-Antwort)."`
+	Size   fileee.ImageSize `query:"size" doc:"Bildgröße (smedium/medium)." default:"medium"`
+}
+
+// handleDownloadSharedPageImage implementiert GET /v1/share-objects/{token}/pages/{pageId}/image
+// als Stream (analog handleDownloadPageImage, handlers_documents.go, aber anonym über s.sc statt
+// s.fc). Braucht KEINEN vorherigen Resolve-Aufruf — ShareClient.DownloadPageImage nimmt Token und
+// pageId direkt entgegen (eigener Token-Endpunkt "GET /api/v1/sharing/:token/:pageId").
+func (s *Server) handleDownloadSharedPageImage(ctx context.Context, in *downloadSharedPageImageInput) (*huma.StreamResponse, error) {
+	size := in.Size
+	if size == "" {
+		size = fileee.ImageSizeMedium
+	}
+	rc, err := s.sc.DownloadPageImage(ctx, in.Token, in.PageID, size)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &huma.StreamResponse{
+		Body: func(sctx huma.Context) {
+			defer rc.Close()
+			sctx.SetHeader("Content-Type", "image/jpeg")
+			if _, err := io.Copy(sctx.BodyWriter(), rc); err != nil {
+				s.log.Error("shared page-image stream copy fehlgeschlagen", "token", in.Token, "page_id", in.PageID, "error", err)
+			}
+		},
+	}, nil
+}
+
+// getSharedPageOCRInput steuert GET /v1/share-objects/{token}/pages/{pageId}/ocr.
+type getSharedPageOCRInput struct {
+	Token  string `path:"token" doc:"Freigabe-Token."`
+	PageID string `path:"pageId" doc:"Seiten-ID (aus SharedDocument.PageIDs einer vorherigen Resolve-Antwort)."`
+}
+
+// getSharedPageOCROutput ist der Response-Body von GET /v1/share-objects/{token}/pages/{pageId}/ocr:
+// die flache Liste der erkannten Text-Tokens mit Bounding-Box (fileee.OCRToken, analog
+// getPageOCROutput, handlers_documents.go).
+type getSharedPageOCROutput struct {
+	Body []fileee.OCRToken
+}
+
+// handleGetSharedPageOCR implementiert GET /v1/share-objects/{token}/pages/{pageId}/ocr. Anders
+// als handleDownloadSharedPageImage braucht dieser Endpunkt EINEN vorgeschalteten Resolve-Aufruf:
+// ShareClient.SharedPageOCR verlangt shareId/sharedById (fileee.SharedObject.ID/SharedByID) statt
+// des rohen Tokens (fileee/ocr.go-Doku).
+func (s *Server) handleGetSharedPageOCR(ctx context.Context, in *getSharedPageOCRInput) (*getSharedPageOCROutput, error) {
+	obj, err := s.sc.Resolve(ctx, in.Token)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	toks, err := s.sc.SharedPageOCR(ctx, in.PageID, obj.ID, obj.SharedByID)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &getSharedPageOCROutput{Body: toks}, nil
+}
+
+// downloadSharedDocumentPDFInput steuert GET /v1/share-objects/{token}/documents/{docId}/pdf.
+type downloadSharedDocumentPDFInput struct {
+	Token string         `path:"token" doc:"Freigabe-Token."`
+	DocID string         `path:"docId" doc:"Dokument-ID (fileee.SharedDocument.ID aus einer vorherigen Resolve-Antwort)."`
+	Mode  fileee.PDFMode `query:"mode" doc:"download (Originaldatei) oder print (druckoptimierte Fassung)." default:"download"`
+}
+
+// handleDownloadSharedDocumentPDF implementiert GET /v1/share-objects/{token}/documents/{docId}/pdf
+// als Stream (analog handleDownloadDocumentPDF, handlers_documents.go, aber anonym über s.sc statt
+// s.fc). Braucht EINEN vorgeschalteten Resolve-Aufruf: ShareClient.DownloadSharedPDF verlangt die
+// shareId (fileee.SharedObject.ID) statt des rohen Tokens, UND das PDF liegt auf dem Static-Host
+// (fileee/shareclient.go DownloadSharedPDF-Doku), nicht auf dem API-Host — beides erledigt s.sc
+// intern, der Handler selbst kennt den Static-Host nicht.
+func (s *Server) handleDownloadSharedDocumentPDF(ctx context.Context, in *downloadSharedDocumentPDFInput) (*huma.StreamResponse, error) {
+	mode := in.Mode
+	if mode == "" {
+		mode = fileee.PDFModeDownload
+	}
+	obj, err := s.sc.Resolve(ctx, in.Token)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	rc, err := s.sc.DownloadSharedPDF(ctx, obj.ID, in.DocID, mode)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &huma.StreamResponse{
+		Body: func(sctx huma.Context) {
+			defer rc.Close()
+			sctx.SetHeader("Content-Type", "application/pdf")
+			if _, err := io.Copy(sctx.BodyWriter(), rc); err != nil {
+				s.log.Error("shared pdf stream copy fehlgeschlagen", "token", in.Token, "doc_id", in.DocID, "error", err)
+			}
+		},
+	}, nil
 }
