@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 )
 
 // Sentinel-Fehler für die häufigsten Fileee-Fehlerfälle (API.md §2.6/§4.1). Aufrufer prüfen mit
@@ -17,6 +18,13 @@ var (
 	// erkannt hat (die zurückgegebene id weicht von der gesendeten client-id ab). Das UploadResult
 	// ist trotzdem befüllt (Document = das existierende Dokument, IsDuplicate = true).
 	ErrDuplicateDocument = errors.New("fileee: uploaded document already exists")
+	// ErrRateLimited meldet, dass der Server mit HTTP 429 gedrosselt hat (nach Ausschöpfen der
+	// automatischen Retries). Per errors.Is auf einem *APIError prüfbar. Für eine account-weite
+	// Sperre (secondsBlocked) siehe BlockedError.
+	ErrRateLimited = errors.New("fileee: rate limited")
+	// ErrUnsupportedFileType meldet, dass der Upload einen vom Server nicht unterstützten Dateityp
+	// hatte (HTTP 415 / apiError UNSUPPORTED_FILE_TYPE — Fileee akzeptiert PDF, JPEG, PNG).
+	ErrUnsupportedFileType = errors.New("fileee: unsupported file type")
 )
 
 // BlockedError wird zurückgegeben, wenn user-session.secondsBlocked > 0 meldet (API.md §2.8,
@@ -42,6 +50,20 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("fileee: api error %s (http %d): %s", e.Code, e.HTTPStatus, e.Message)
+}
+
+// Is macht bekannte API-Fehler über errors.Is prüfbar (z. B. errors.Is(err, ErrRateLimited)),
+// ohne dass Aufrufer den HTTP-Status oder Code selbst interpretieren müssen.
+func (e *APIError) Is(target error) bool {
+	switch target {
+	case ErrRateLimited:
+		return e.HTTPStatus == http.StatusTooManyRequests
+	case ErrUnsupportedFileType:
+		return e.HTTPStatus == http.StatusUnsupportedMediaType || e.Code == "UNSUPPORTED_FILE_TYPE"
+	case ErrNotFound:
+		return e.HTTPStatus == http.StatusNotFound
+	}
+	return false
 }
 
 // apiErrorBody deckt beide belegten Fehler-Body-Varianten strukturell ab (Felder sind ein
