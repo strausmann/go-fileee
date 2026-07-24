@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -114,6 +116,68 @@ func newTestServer(t *testing.T, routes map[string]mockRoute) (*Server, *httptes
 	t.Cleanup(ts.Close)
 
 	return s, ts
+}
+
+// newTestServerWithConfig baut wie newTestServer einen einsatzbereiten *Server samt httptest.Server,
+// erlaubt aber zusätzliche Config-Felder zu setzen, die newTestServer nicht exponiert (v.a.
+// WaitTimeout/WaitMax für die Wait-Handler-Tests und MaxUploadBytes für die Upload-Size-Limit-Tests)
+// — APIToken/DocsPublic/ClientIPHeaders werden trotzdem IMMER wie bei newTestServer belegt, damit
+// die Token-Middleware in jedem Test funktioniert, unabhängig davon, was der Aufrufer in cfg
+// mitgibt.
+func newTestServerWithConfig(t *testing.T, cfg Config, routes map[string]mockRoute) (*Server, *httptest.Server) {
+	t.Helper()
+
+	cfg.APIToken = testAPIToken
+	cfg.DocsPublic = true
+	cfg.ClientIPHeaders = defaultClientIPHeaders
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	fc := newTestFileeeClient(t, routes)
+
+	s := NewServer(cfg, fc, log)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	return s, ts
+}
+
+// buildUploadMultipart baut den multipart/form-data-Body für POST /v1/documents: ein "file"-Feld
+// (Inhalt content, Dateiname filename) und — falls title nicht leer ist — ein zusätzliches
+// "title"-Textfeld. Liefert den fertigen Body sowie den passenden Content-Type-Header
+// (inkl. Boundary).
+func buildUploadMultipart(t *testing.T, filename, content, title string) (*bytes.Buffer, string) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := fw.Write([]byte(content)); err != nil {
+		t.Fatalf("Datei-Inhalt schreiben: %v", err)
+	}
+	if title != "" {
+		if err := mw.WriteField("title", title); err != nil {
+			t.Fatalf("title-Feld schreiben: %v", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("multipart schließen: %v", err)
+	}
+	return &buf, mw.FormDataContentType()
+}
+
+// newAuthedRequest baut einen http.Request mit gesetztem API-Token-Header (X-API-Key) — kleine
+// Abkürzung für die vielen Write-Handler-Tests dieser Datei, die alle denselben Header brauchen.
+func newAuthedRequest(t *testing.T, method, url string, body io.Reader) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		t.Fatalf("NewRequest %s %s: %v", method, url, err)
+	}
+	req.Header.Set("X-API-Key", testAPIToken)
+	return req
 }
 
 // TestHealthz_NoTokenRequired prüft: GET /healthz antwortet mit 200, ganz ohne API-Token —
@@ -349,5 +413,874 @@ func TestListTags_ReturnsList(t *testing.T) {
 	}
 	if out.TotalRows != 1 || len(out.Items) != 1 || out.Items[0].Name != "Rechnung" {
 		t.Fatalf("out = %+v, want ein Tag Name=Rechnung, TotalRows=1", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 8: Write-Handler (Upload/Update/Share/Boxes/Reminders/Contacts/Export/Wait)
+// ---------------------------------------------------------------------------
+
+// TestUploadDocument_Success prüft den Happy-Path von POST /v1/documents: der Mock-Fileee echot
+// die vom Client generierte id unverändert zurück (kein Duplikat, analog
+// fileee.TestUpload_NewDocumentNoError für dasselbe Muster in der Lib) — der Handler antwortet mit
+// 200 und einem nicht-leeren "id"-Feld, ohne "isDuplicate". Braucht eine eigene, echoende
+// Mock-Route statt des statischen mockRoute-Musters (newTestFileeeClient), weil die client-id
+// zufällig von der Lib generiert wird (fileee.newObjectID) und daher nicht vorab bekannt ist.
+func TestUploadDocument_Success(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/f/user-session", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"authorized":true,"secondsBlocked":0}`))
+	})
+	mux.HandleFunc("POST /api/documents/rest", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("Mock: multipart form parsen: %v", err)
+		}
+		id := r.FormValue("id")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"` + id + `","status":"CLASSIFIED"}`))
+	})
+	mockSrv := httptest.NewServer(mux)
+	t.Cleanup(mockSrv.Close)
+
+	store := fileee.NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))
+	seedSession := &fileee.Session{
+		Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "test-session"}},
+		SavedAt: time.Now(),
+	}
+	if err := store.Save(context.Background(), seedSession); err != nil {
+		t.Fatalf("Session-Store vorbefüllen: %v", err)
+	}
+	fc, err := fileee.New(
+		fileee.Credentials{Username: "test@example.invalid", Password: "test-pw"},
+		fileee.WithBaseURL(mockSrv.URL), fileee.WithSessionStore(store),
+	)
+	if err != nil {
+		t.Fatalf("fileee.New: %v", err)
+	}
+
+	cfg := Config{APIToken: testAPIToken, DocsPublic: true, ClientIPHeaders: defaultClientIPHeaders, MaxUploadBytes: 32 << 20}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := NewServer(cfg, fc, log)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	body, contentType := buildUploadMultipart(t, "hello.txt", "PDFDATA", "Mein Titel")
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents", body)
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var doc fileee.Document
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("Body als fileee.Document dekodieren: %v", err)
+	}
+	if doc.ID == "" {
+		t.Fatalf("doc.ID ist leer, want eine generierte client-id")
+	}
+}
+
+// TestUploadDocument_DuplicateReturns409 ist der Brief-Pflichtfall: erkennt der Mock-Fileee ein
+// Duplikat (liefert eine andere id als die client-generierte, siehe
+// fileee.TestUpload_DuplicateReturnsError), antwortet der Handler mit 409 und einem Body, der
+// zusätzlich zu error/code die id des bestehenden Dokuments sowie isDuplicate:true trägt
+// (Design-Spec §12) — NICHT das generische {error,code}-Schema aus mapError.
+func TestUploadDocument_DuplicateReturns409(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"existing-server-id","status":"CLASSIFIED"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body, contentType := buildUploadMultipart(t, "hello.txt", "PDFDATA", "")
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents", body)
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409, body=%s", resp.StatusCode, respBody)
+	}
+	var out struct {
+		Error       string `json:"error"`
+		Code        string `json:"code"`
+		ID          string `json:"id"`
+		IsDuplicate bool   `json:"isDuplicate"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body dekodieren: %v", err)
+	}
+	if out.Code != "duplicate" || out.ID != "existing-server-id" || !out.IsDuplicate {
+		t.Fatalf("out = %+v, want code=duplicate, id=existing-server-id, isDuplicate=true", out)
+	}
+}
+
+// TestUploadDocument_ExceedsMaxUploadBytes prüft, dass uploadSizeLimit (server.go/
+// handlers_documents.go) greift: bei einem auf 8 Bytes gedeckelten MaxUploadBytes lässt ein
+// Multipart-Body, der diese Grenze überschreitet, r.ParseMultipartForm mit
+// "http: request body too large" fehlschlagen — huma antwortet mit einem Validierungsfehler
+// (422, siehe huma@v2.35.0 huma.go errStatus-Default), nicht mit 200/500.
+func TestUploadDocument_ExceedsMaxUploadBytes(t *testing.T) {
+	cfg := Config{MaxUploadBytes: 8}
+	_, ts := newTestServerWithConfig(t, cfg, nil)
+
+	body, contentType := buildUploadMultipart(t, "hello.txt", "DIESER INHALT IST GROESSER ALS ACHT BYTES", "")
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents", body)
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("status = 200, want einen Fehlerstatus (Upload-Limit überschritten)")
+	}
+}
+
+// TestUpdateDocument_Success prüft den Happy-Path von PUT /v1/documents/{id}: der Mock-Fileee
+// liefert das aktualisierte Dokument, der Handler antwortet mit 200 und demselben Body.
+func TestUpdateDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"PUT /api/documents/rest/doc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"doc-1","version":2,"status":"DONE"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPut, ts.URL+"/v1/documents/doc-1", strings.NewReader(`{"version":1,"status":"DONE"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /v1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"version":2`) {
+		t.Fatalf("Body enthält kein version=2: %s", body)
+	}
+}
+
+// TestUpdateDocument_BackendError prüft, dass ein sonstiger Fileee-APIError (hier 400) unverändert
+// mit seinem eigenen Status durchgereicht wird (mapError, Design-Spec §12 "sonstiger APIError →
+// dessen HTTPStatus").
+func TestUpdateDocument_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"PUT /api/documents/rest/doc-1": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"invalid data"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPut, ts.URL+"/v1/documents/doc-1", strings.NewReader(`{"version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /v1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestShareDocuments_Success ist der Brief-Pflichtfall: POST /v1/share liefert {link,shareId}
+// unverändert aus fileee.Share (json:"link"/"shareId", siehe fileee/share.go) durch.
+func TestShareDocuments_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest/share": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"link":"https://my.fileee.com/shared/abc123","shareId":"abc123"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/share", strings.NewReader(`{"documentIds":["doc-1"]}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/share: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Share
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Share dekodieren: %v", err)
+	}
+	if out.Link != "https://my.fileee.com/shared/abc123" || out.ShareID != "abc123" {
+		t.Fatalf("out = %+v, want link/shareId aus der Mock-Antwort", out)
+	}
+}
+
+// TestShareDocuments_BackendError prüft den Fehlerpfad von POST /v1/share (Backend-4xx passt
+// unverändert durch mapError durch). Bewusst NICHT 403: ein 403-Antwortstatus löst in der Core-Lib
+// automatisch genau einen Re-Auth-Versuch aus (fileee/transport.go RoundTrip,
+// "resp.StatusCode == http.StatusForbidden && !reauthed && t.reauth != nil") — das würde hier den
+// eigentlichen Test verfälschen (der Mock-Server implementiert keinen Login-Flow).
+func TestShareDocuments_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest/share": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"invalid documentIds"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/share", strings.NewReader(`{"documentIds":["doc-1"]}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/share: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestUnshareDocument_Success prüft den Happy-Path von POST /v1/documents/{id}/unshare — die
+// Fileee-Mock-Antwort ist ein leerer 200er (closeAndCheck, fileee/boxes.go, akzeptiert 200/204),
+// der Handler liefert dementsprechend 204 (kein Response-Body).
+func TestUnshareDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest/doc-1/unshare": {Status: http.StatusOK},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents/doc-1/unshare", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents/doc-1/unshare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestUnshareDocument_BackendError prüft den Fehlerpfad von POST /v1/documents/{id}/unshare.
+func TestUnshareDocument_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest/doc-1/unshare": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown document"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents/doc-1/unshare", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents/doc-1/unshare: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestAddBoxDocument_Success prüft den Happy-Path von POST /v1/boxes/{boxId}/documents/{docId} —
+// dünner Durchgriff auf Boxes.AddDocument, kein Destruktiv-Gate (Design-Spec §4.2), 204 ohne Body.
+func TestAddBoxDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/fileeeboxes/box-1/doc-1": {Status: http.StatusOK},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/boxes/box-1/documents/doc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/boxes/box-1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestAddBoxDocument_BackendError prüft den Fehlerpfad von
+// POST /v1/boxes/{boxId}/documents/{docId}.
+func TestAddBoxDocument_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/fileeeboxes/box-1/doc-1": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown box"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/boxes/box-1/documents/doc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/boxes/box-1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestRemoveBoxDocument_Success prüft den Happy-Path von
+// DELETE /v1/boxes/{boxId}/documents/{docId} — dünner Durchgriff auf Boxes.RemoveDocument.
+func TestRemoveBoxDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/fileeeboxes/box-1/doc-1": {Status: http.StatusNoContent},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/boxes/box-1/documents/doc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/boxes/box-1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestRemoveBoxDocument_BackendError prüft den Fehlerpfad von
+// DELETE /v1/boxes/{boxId}/documents/{docId}.
+func TestRemoveBoxDocument_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"DELETE /api/fileeeboxes/box-1/doc-1": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"cannot remove"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/boxes/box-1/documents/doc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/boxes/box-1/documents/doc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestCreateReminder_Success prüft den Happy-Path von POST /v1/reminders.
+func TestCreateReminder_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/reminders/rest": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"rem-1","description":"Zahlung fällig","documentId":"doc-1","startDate":"2026-08-01","version":1}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	reqBody := `{"description":"Zahlung fällig","documentId":"doc-1","startDate":"2026-08-01"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/reminders", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/reminders: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Reminder
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Reminder dekodieren: %v", err)
+	}
+	if out.ID != "rem-1" {
+		t.Fatalf("out.ID = %q, want rem-1", out.ID)
+	}
+}
+
+// TestCreateReminder_BackendError prüft den Fehlerpfad von POST /v1/reminders.
+func TestCreateReminder_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/reminders/rest": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"missing documentId"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/reminders", strings.NewReader(`{"description":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/reminders: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestUpdateReminder_Success prüft den Happy-Path von PUT /v1/reminders/{id}.
+func TestUpdateReminder_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"PUT /api/reminders/rest/rem-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"rem-1","description":"Zahlung erledigt","done":true,"version":2}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPut, ts.URL+"/v1/reminders/rem-1", strings.NewReader(`{"description":"Zahlung erledigt","done":true,"version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /v1/reminders/rem-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"done":true`) {
+		t.Fatalf("Body enthält kein done=true: %s", body)
+	}
+}
+
+// TestUpdateReminder_BackendError prüft den Fehlerpfad von PUT /v1/reminders/{id}.
+func TestUpdateReminder_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"PUT /api/reminders/rest/rem-1": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown reminder"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPut, ts.URL+"/v1/reminders/rem-1", strings.NewReader(`{"version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /v1/reminders/rem-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestCreateContact_Success prüft den Happy-Path von POST /v1/contacts.
+func TestCreateContact_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/contacts/rest": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"con-1","firstName":"Max","lastName":"Mustermann","version":1}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/contacts", strings.NewReader(`{"firstName":"Max","lastName":"Mustermann"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/contacts: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Contact
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Contact dekodieren: %v", err)
+	}
+	if out.ID != "con-1" {
+		t.Fatalf("out.ID = %q, want con-1", out.ID)
+	}
+}
+
+// TestCreateContact_BackendError prüft den Fehlerpfad von POST /v1/contacts.
+func TestCreateContact_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/contacts/rest": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"IllegalConditions","errorMessage":"invalid contact"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/contacts", strings.NewReader(`{"firstName":"Max"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/contacts: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestUpdateContact_Success prüft den Happy-Path von PUT /v1/contacts/{id}.
+func TestUpdateContact_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"PUT /api/contacts/rest/con-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"con-1","firstName":"Maxine","lastName":"Mustermann","version":2}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPut, ts.URL+"/v1/contacts/con-1", strings.NewReader(`{"firstName":"Maxine","lastName":"Mustermann","version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /v1/contacts/con-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"firstName":"Maxine"`) {
+		t.Fatalf("Body enthält kein firstName=Maxine: %s", body)
+	}
+}
+
+// TestUpdateContact_BackendError prüft den Fehlerpfad von PUT /v1/contacts/{id}.
+func TestUpdateContact_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"PUT /api/contacts/rest/con-1": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown contact"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPut, ts.URL+"/v1/contacts/con-1", strings.NewReader(`{"version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT /v1/contacts/con-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestExportZip_Success prüft den Happy-Path von POST /v1/documents/export-zip: der Handler
+// antwortet mit dem gestarteten Process-Objekt.
+func TestExportZip_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest/zip": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"proc-1","status":"Waiting","type":"io.fileee.shared.process.DownloadAllProcess"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents/export-zip", strings.NewReader(`{"documentIds":["doc-1"],"zipPassword":"geheim"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents/export-zip: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Process
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Process dekodieren: %v", err)
+	}
+	if out.ID != "proc-1" {
+		t.Fatalf("out.ID = %q, want proc-1", out.ID)
+	}
+}
+
+// TestExportZip_BackendError prüft den Fehlerpfad von POST /v1/documents/export-zip.
+func TestExportZip_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/documents/rest/zip": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"invalid password"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/documents/export-zip", strings.NewReader(`{"zipPassword":""}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/documents/export-zip: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestGetProcess_Success prüft den Happy-Path von GET /v1/processes/{id} (einmaliger Poll).
+func TestGetProcess_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/processes/proc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"proc-1","status":"Done"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/processes/proc-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/processes/proc-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Process
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Process dekodieren: %v", err)
+	}
+	if out.Status != "Done" {
+		t.Fatalf("out.Status = %q, want Done", out.Status)
+	}
+}
+
+// TestWaitProcess_TerminalReturnsImmediately ist der Happy-Path von
+// POST /v1/processes/{id}/wait: ist der Vorgang bereits beim ersten Poll terminal, liefert
+// WaitForProcess sofort (ohne die Deadline abzuwarten) den finalen Status.
+func TestWaitProcess_TerminalReturnsImmediately(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/processes/proc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"proc-1","status":"Done"}`),
+		},
+	}
+	cfg := Config{WaitTimeout: 5 * time.Second, WaitMax: 10 * time.Second}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/processes/proc-1/wait?timeout=5s", nil)
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/processes/proc-1/wait: %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Process
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Process dekodieren: %v", err)
+	}
+	if out.Status != "Done" {
+		t.Fatalf("out.Status = %q, want Done", out.Status)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("elapsed = %v, want deutlich unter der 5s-Deadline (Vorgang war sofort terminal)", elapsed)
+	}
+}
+
+// TestWaitProcess_NonTerminalTimeoutReturns200 ist der Brief-Pflichtfall: bleibt der Vorgang bis
+// zum Ablauf der (auf timeout=1s gedeckelten) Deadline nicht-terminal ("Running"), antwortet der
+// Handler MIT 200 und dem letzten Status — kein Fehler (Design-Spec §4.4). Das belegt den
+// DeadlineExceeded-Zweig in handleWaitProcess (handlers_share.go): WaitForProcess selbst liefert in
+// diesem Fall (nil, context.DeadlineExceeded) OHNE den letzten Status (fileee/export.go), der
+// Handler muss also selbst nachpollen.
+func TestWaitProcess_NonTerminalTimeoutReturns200(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/processes/proc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"proc-1","status":"Running"}`),
+		},
+	}
+	cfg := Config{WaitTimeout: 5 * time.Second, WaitMax: 5 * time.Second}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/processes/proc-1/wait?timeout=1s", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/processes/proc-1/wait: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200 (Nicht-Terminal + Timeout ist KEIN Fehler), body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Process
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Process dekodieren: %v", err)
+	}
+	if out.Status != "Running" {
+		t.Fatalf("out.Status = %q, want Running (letzter Poll-Status)", out.Status)
+	}
+}
+
+// TestWaitProcess_TimeoutCappedByWaitMax prüft die Deckelung aus Design-Spec §4.4: fordert der
+// Client ein Timeout von 10s an, cfg.WaitMax aber nur 1s, MUSS die effektive Wartezeit auf 1s
+// gedeckelt werden — der Test belegt das indirekt über die Laufzeit (deutlich unter 10s) UND den
+// 200-mit-Running-Body-Rückgabewert (identisch zum Nicht-Terminal-Timeout-Fall).
+func TestWaitProcess_TimeoutCappedByWaitMax(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/processes/proc-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"proc-1","status":"Running"}`),
+		},
+	}
+	cfg := Config{WaitTimeout: 5 * time.Second, WaitMax: 1 * time.Second}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/processes/proc-1/wait?timeout=10s", nil)
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/processes/proc-1/wait: %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("elapsed = %v, want deutlich unter den angeforderten 10s (WaitMax=1s muss gedeckelt haben)", elapsed)
+	}
+}
+
+// TestWaitProcess_BackendError prüft, dass ein Fehler, der NICHT von der Deadline stammt (hier ein
+// Backend-4xx beim allerersten Poll), unverändert über mapError durchgereicht wird — anders als der
+// DeadlineExceeded-Fall antwortet der Handler hier NICHT mit 200.
+func TestWaitProcess_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/processes/proc-1": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown process"}`),
+		},
+	}
+	cfg := Config{WaitTimeout: 5 * time.Second, WaitMax: 5 * time.Second}
+	_, ts := newTestServerWithConfig(t, cfg, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/processes/proc-1/wait?timeout=1s", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/processes/proc-1/wait: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestWaitProcess_InvalidTimeoutReturns400 prüft, dass ein nicht als Go-Duration parsbarer
+// timeout-Query-Parameter mit 400 abgelehnt wird, statt z. B. den Default stillschweigend zu
+// verwenden oder mit 500 zu scheitern.
+func TestWaitProcess_InvalidTimeoutReturns400(t *testing.T) {
+	cfg := Config{WaitTimeout: 5 * time.Second, WaitMax: 5 * time.Second}
+	_, ts := newTestServerWithConfig(t, cfg, nil)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/processes/proc-1/wait?timeout=notaduration", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/processes/proc-1/wait: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
 	}
 }

@@ -53,8 +53,16 @@ func (s *Server) Handler() http.Handler {
 	api := newAPI(mux)
 	s.registerDocumentRoutes(api)
 	s.registerEntityRoutes(api)
+	s.registerShareRoutes(api)
 
-	inner := APITokenAuth(s.cfg.APIToken, isAuthExempt(s.cfg), http.Handler(mux))
+	// uploadSizeLimit deckelt POST /v1/documents auf cfg.MaxUploadBytes (handlers_documents.go) —
+	// Huma wendet op.MaxBodyBytes NUR auf den regulären (Nicht-Multipart) Body-Lesepfad an
+	// (huma@v2.35.0 huma.go readBody), NICHT auf den Multipart-Formular-Pfad (adapters/humago
+	// GetMultipartForm ruft r.ParseMultipartForm ohne Größenlimit auf). Ohne dieses Limit könnte
+	// ein Client beliebig viele Bytes senden, bevor ParseMultipartForm überhaupt zurückkehrt.
+	limited := uploadSizeLimit(s.cfg.MaxUploadBytes, http.Handler(mux))
+
+	inner := APITokenAuth(s.cfg.APIToken, isAuthExempt(s.cfg), limited)
 	return AccessLog(os.Stdout, s.cfg.TrustedProxies, s.cfg.ClientIPHeaders, inner)
 }
 

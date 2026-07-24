@@ -65,11 +65,13 @@ type listBoxesOutput struct {
 	Body entityListBody[fileee.FileeeBox]
 }
 
-// registerEntityRoutes registriert die Stammdaten-Read-Operationen (Task 7, Design-Spec §4.1,
-// docs/superpowers/specs/2026-07-24-fileee-server-design.md im homelab-management-Repo): Tags,
-// Companies, Contacts, DocumentTypes, DocumentTypeSchemes, Reminders (alle über das generische
-// ReadService[T]-Muster) sowie Boxes (eigenes BoxService-Interface mit List/Get statt
-// Query/Diff/Get).
+// registerEntityRoutes registriert die Stammdaten-Operationen (Task 7 Read + Task 8 Write,
+// Design-Spec §4.1/§4.2, docs/superpowers/specs/2026-07-24-fileee-server-design.md im
+// homelab-management-Repo): Tags, Companies, Contacts, DocumentTypes, DocumentTypeSchemes,
+// Reminders (alle über das generische ReadService[T]-Muster) sowie Boxes (eigenes
+// BoxService-Interface mit List/Get statt Query/Diff/Get). Write-Operationen (Reminders/Contacts
+// Create+Update, Box-Dokument-Zuordnung) delegieren wie die Read-Operationen direkt an s.fc und
+// übersetzen Fehler ausschließlich über mapError.
 func (s *Server) registerEntityRoutes(api huma.API) {
 	registerEntityListRoute(api, "list-tags", "/v1/tags", s.fc.Tags.Query)
 	registerEntityListRoute(api, "list-companies", "/v1/companies", s.fc.Companies.Query)
@@ -89,6 +91,55 @@ func (s *Server) registerEntityRoutes(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/v1/boxes/{id}",
 	}, s.handleGetBox)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "add-box-document",
+		Method:      http.MethodPost,
+		Path:        "/v1/boxes/{boxId}/documents/{docId}",
+		Summary:     "Dokument in eine FileeeBox einheften",
+	}, s.handleAddBoxDocument)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "remove-box-document",
+		Method:      http.MethodDelete,
+		Path:        "/v1/boxes/{boxId}/documents/{docId}",
+		Summary:     "Dokument aus einer FileeeBox aushängen (kein Destruktiv-Gate, Ausheften ≠ Löschen)",
+	}, s.handleRemoveBoxDocument)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "create-reminder",
+		Method:      http.MethodPost,
+		Path:        "/v1/reminders",
+		Summary:     "Erinnerung anlegen",
+		// SkipValidateBody: siehe Begründung bei "update-document" (handlers_documents.go) —
+		// fileee.Reminder ist derselbe Fall eines omitempty-losen Lib-Wire-Typs; Reminders.Create
+		// füllt fehlende id ohnehin selbst auf (fileee/reminders.go).
+		SkipValidateBody: true,
+	}, s.handleCreateReminder)
+
+	huma.Register(api, huma.Operation{
+		OperationID:      "update-reminder",
+		Method:           http.MethodPut,
+		Path:             "/v1/reminders/{id}",
+		Summary:          "Erinnerung aktualisieren",
+		SkipValidateBody: true,
+	}, s.handleUpdateReminder)
+
+	huma.Register(api, huma.Operation{
+		OperationID:      "create-contact",
+		Method:           http.MethodPost,
+		Path:             "/v1/contacts",
+		Summary:          "Kontakt anlegen",
+		SkipValidateBody: true,
+	}, s.handleCreateContact)
+
+	huma.Register(api, huma.Operation{
+		OperationID:      "update-contact",
+		Method:           http.MethodPut,
+		Path:             "/v1/contacts/{id}",
+		Summary:          "Kontakt aktualisieren",
+		SkipValidateBody: true,
+	}, s.handleUpdateContact)
 }
 
 // handleListBoxes implementiert GET /v1/boxes über Boxes.List (intern ein Diff mit vollem
@@ -109,4 +160,113 @@ func (s *Server) handleGetBox(ctx context.Context, in *getBoxInput) (*getBoxOutp
 		return nil, mapError(err)
 	}
 	return &getBoxOutput{Body: *box}, nil
+}
+
+// boxDocumentInput steuert POST/DELETE /v1/boxes/{boxId}/documents/{docId} — dieselben Pfad-
+// Parameter für Ein- und Aushängen (Design-Spec §4.2: "Ausheften ≠ Löschen → kein Destruktiv-Gate",
+// deshalb ohne FILEEE_ALLOW_DESTRUCTIVE-Prüfung, anders als die echten Hard-DELETE-Routen).
+type boxDocumentInput struct {
+	BoxID string `path:"boxId" doc:"FileeeBox-ID."`
+	DocID string `path:"docId" doc:"Dokument-ID."`
+}
+
+// handleAddBoxDocument implementiert POST /v1/boxes/{boxId}/documents/{docId} — dünner Durchgriff
+// auf Boxes.AddDocument. Kein Response-Body (204 No Content), da die Lib-Methode selbst nichts
+// zurückliefert.
+func (s *Server) handleAddBoxDocument(ctx context.Context, in *boxDocumentInput) (*struct{}, error) {
+	if err := s.fc.Boxes.AddDocument(ctx, in.BoxID, in.DocID); err != nil {
+		return nil, mapError(err)
+	}
+	return nil, nil
+}
+
+// handleRemoveBoxDocument implementiert DELETE /v1/boxes/{boxId}/documents/{docId} — dünner
+// Durchgriff auf Boxes.RemoveDocument (kein Destruktiv-Gate, siehe boxDocumentInput-Doku).
+func (s *Server) handleRemoveBoxDocument(ctx context.Context, in *boxDocumentInput) (*struct{}, error) {
+	if err := s.fc.Boxes.RemoveDocument(ctx, in.BoxID, in.DocID); err != nil {
+		return nil, mapError(err)
+	}
+	return nil, nil
+}
+
+// createReminderInput steuert POST /v1/reminders.
+type createReminderInput struct {
+	Body fileee.Reminder
+}
+
+// reminderOutput ist der gemeinsame Response-Body von POST /v1/reminders und
+// PUT /v1/reminders/{id}.
+type reminderOutput struct {
+	Body fileee.Reminder
+}
+
+// handleCreateReminder implementiert POST /v1/reminders — dünner Durchgriff auf
+// Reminders.Create (fehlt Body.ID, generiert die Lib selbst eine ObjectId, siehe
+// fileee/reminders.go).
+func (s *Server) handleCreateReminder(ctx context.Context, in *createReminderInput) (*reminderOutput, error) {
+	created, err := s.fc.Reminders.Create(ctx, &in.Body)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &reminderOutput{Body: *created}, nil
+}
+
+// updateReminderInput steuert PUT /v1/reminders/{id}. Die Pfad-id ist maßgeblich — sie
+// überschreibt ein eventuell abweichendes Body.ID (analog updateDocumentInput,
+// handlers_documents.go).
+type updateReminderInput struct {
+	ID   string `path:"id" doc:"Erinnerungs-ID."`
+	Body fileee.Reminder
+}
+
+// handleUpdateReminder implementiert PUT /v1/reminders/{id} — dünner Durchgriff auf
+// Reminders.Update.
+func (s *Server) handleUpdateReminder(ctx context.Context, in *updateReminderInput) (*reminderOutput, error) {
+	r := in.Body
+	r.ID = in.ID
+	updated, err := s.fc.Reminders.Update(ctx, &r)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &reminderOutput{Body: *updated}, nil
+}
+
+// createContactInput steuert POST /v1/contacts.
+type createContactInput struct {
+	Body fileee.Contact
+}
+
+// contactOutput ist der gemeinsame Response-Body von POST /v1/contacts und
+// PUT /v1/contacts/{id}.
+type contactOutput struct {
+	Body fileee.Contact
+}
+
+// handleCreateContact implementiert POST /v1/contacts — dünner Durchgriff auf Contacts.Create
+// (contactStatus defaultet in der Lib auf CUSTOM, wenn nicht gesetzt, siehe fileee/contacts.go).
+func (s *Server) handleCreateContact(ctx context.Context, in *createContactInput) (*contactOutput, error) {
+	created, err := s.fc.Contacts.Create(ctx, &in.Body)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &contactOutput{Body: *created}, nil
+}
+
+// updateContactInput steuert PUT /v1/contacts/{id}. Die Pfad-id ist maßgeblich — sie überschreibt
+// ein eventuell abweichendes Body.ID.
+type updateContactInput struct {
+	ID   string `path:"id" doc:"Kontakt-ID."`
+	Body fileee.Contact
+}
+
+// handleUpdateContact implementiert PUT /v1/contacts/{id} — dünner Durchgriff auf
+// Contacts.Update.
+func (s *Server) handleUpdateContact(ctx context.Context, in *updateContactInput) (*contactOutput, error) {
+	c := in.Body
+	c.ID = in.ID
+	updated, err := s.fc.Contacts.Update(ctx, &c)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return &contactOutput{Body: *updated}, nil
 }
