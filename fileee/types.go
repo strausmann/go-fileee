@@ -488,7 +488,7 @@ func setSimpleString(out map[string]json.RawMessage, key, value string) {
 	b, err := json.Marshal(struct {
 		Value string `json:"value"`
 		Type  string `json:"type"`
-	}{value, "String"})
+	}{value, "TEXT"})
 	if err == nil {
 		out[key] = b
 	}
@@ -501,7 +501,7 @@ func setSimpleBool(out map[string]json.RawMessage, key string, value *bool) {
 	b, err := json.Marshal(struct {
 		Value bool   `json:"value"`
 		Type  string `json:"type"`
-	}{*value, "Boolean"})
+	}{*value, "BOOLEAN"})
 	if err == nil {
 		out[key] = b
 	}
@@ -514,7 +514,7 @@ func setSimpleInt(out map[string]json.RawMessage, key string, value int) {
 	b, err := json.Marshal(struct {
 		Value int    `json:"value"`
 		Type  string `json:"type"`
-	}{value, "String"})
+	}{value, "INTEGER"})
 	if err == nil {
 		out[key] = b
 	}
@@ -527,7 +527,7 @@ func setSimpleTime(out map[string]json.RawMessage, key string, value *time.Time)
 	b, err := json.Marshal(struct {
 		Value string `json:"value"`
 		Type  string `json:"type"`
-	}{value.Format(time.RFC3339), "String"})
+	}{value.Format("2006-01-02"), "DATE"})
 	if err == nil {
 		out[key] = b
 	}
@@ -541,7 +541,7 @@ func setListStrings(out map[string]json.RawMessage, key string, value []string) 
 		Value         []string `json:"value"`
 		ContainedType string   `json:"containedType"`
 		Type          string   `json:"type"`
-	}{value, "String", "List"})
+	}{value, "TEXT", "LIST"})
 	if err == nil {
 		out[key] = b
 	}

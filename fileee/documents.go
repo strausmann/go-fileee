@@ -82,7 +82,7 @@ func (m UploadMetadata) filename() string {
 
 // UploadResult meldet, ob der Server ein bereits existierendes Dokument erkannt hat
 // (zurückgegebene id weicht von der gesendeten Client-id ab, API.md §4.1 "Serverseitige
-// Duplikaterkennung").
+// Duplikaterkennung"). Bei einem Duplikat liefert Upload zusätzlich ErrDuplicateDocument.
 type UploadResult struct {
 	Document    *Document
 	IsDuplicate bool
@@ -151,7 +151,12 @@ func (s *DocumentService) Upload(ctx context.Context, r io.Reader, meta UploadMe
 	if err := json.Unmarshal(respBody, &doc); err != nil {
 		return nil, fmt.Errorf("fileee: Upload-Antwort dekodieren: %w", err)
 	}
-	return &UploadResult{Document: &doc, IsDuplicate: doc.ID != clientID}, nil
+	if doc.ID != clientID {
+		// Server hat ein bestehendes Dokument erkannt: Result befüllen UND Fehler liefern, damit ein
+		// Aufrufer, der nur err prüft, nicht unbemerkt auf einem BESTEHENDEN Dokument weiterarbeitet.
+		return &UploadResult{Document: &doc, IsDuplicate: true}, ErrDuplicateDocument
+	}
+	return &UploadResult{Document: &doc, IsDuplicate: false}, nil
 }
 
 // DownloadPDF liefert das Original-PDF (GET /api/v1/documents/:id/pdf?mode=..., API.md §4.1) —

@@ -55,14 +55,15 @@ func WithUserAgent(ua string) Option { return func(c *clientConfig) { c.userAgen
 // Client ist der Einstiegspunkt der Lib (Umbrella-Spec §3.1). Zustandslos bis auf die
 // SessionStore-Referenz (ADR-0001).
 type Client struct {
-	Documents     *DocumentService
-	Tags          ReadService[Tag]
-	Companies     ReadService[Company]
-	Contacts      WriteService[Contact]
-	DocumentTypes ReadService[DocumentType]
-	Reminders     ReminderService
-	Boxes         BoxService
-	Processes     ProcessService
+	Documents           *DocumentService
+	Tags                ReadService[Tag]
+	Companies           ReadService[Company]
+	Contacts            WriteService[Contact]
+	DocumentTypes       ReadService[DocumentType]
+	DocumentTypeSchemes ReadService[DocumentTypeScheme]
+	Reminders           ReminderService
+	Boxes               BoxService
+	Processes           ProcessService
 
 	auth       *authClient
 	httpClient *http.Client
@@ -144,6 +145,7 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	c.Companies = newCompanyService(c)
 	c.Contacts = newContactService(c)
 	c.DocumentTypes = newDocumentTypeService(c)
+	c.DocumentTypeSchemes = newDocumentTypeSchemeService(c)
 	c.Reminders = newReminderService(c)
 	c.Boxes = newBoxService(c)
 	c.Processes = newProcessService(c)

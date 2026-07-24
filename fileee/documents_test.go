@@ -144,11 +144,11 @@ func TestDocumentServiceUploadHappyDuplikatErrorNetwork(t *testing.T) {
 		})
 		client := newTestClientAgainstMockServer(t, srv)
 		result, err := client.Documents.Upload(context.Background(), strings.NewReader("test-inhalt"), UploadMetadata{Title: "Testrechnung.pdf"})
-		if err != nil {
-			t.Fatalf("Upload: %v", err)
+		if !errors.Is(err, ErrDuplicateDocument) {
+			t.Fatalf("erwartet ErrDuplicateDocument, bekam %v", err)
 		}
-		if !result.IsDuplicate {
-			t.Fatalf("erwartet IsDuplicate=true, da zurückgegebene id von der gesendeten abweicht")
+		if !result.IsDuplicate || result.Document == nil {
+			t.Fatalf("Result soll trotz Fehler befüllt sein (IsDuplicate + Document): %+v", result)
 		}
 	})
 

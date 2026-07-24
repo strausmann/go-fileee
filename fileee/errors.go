@@ -13,6 +13,10 @@ var (
 	ErrTwoFactorInvalid   = errors.New("fileee: invalid two-factor token")
 	ErrSessionExpired     = errors.New("fileee: session expired")
 	ErrNotFound           = errors.New("fileee: resource not found")
+	// ErrDuplicateDocument meldet, dass der Server beim Upload ein bereits existierendes Dokument
+	// erkannt hat (die zurückgegebene id weicht von der gesendeten client-id ab). Das UploadResult
+	// ist trotzdem befüllt (Document = das existierende Dokument, IsDuplicate = true).
+	ErrDuplicateDocument = errors.New("fileee: uploaded document already exists")
 )
 
 // BlockedError wird zurückgegeben, wenn user-session.secondsBlocked > 0 meldet (API.md §2.8,
