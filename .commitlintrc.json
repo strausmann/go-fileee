@@ -1,0 +1,6 @@
+{
+  "extends": ["@commitlint/config-conventional"],
+  "rules": {
+    "scope-enum": [2, "always", ["auth","transport","session","client","documents","contacts","reminders","conversations","boxes","ocr","share","links","adr","ci","deps","docs","release"]]
+  }
+}
