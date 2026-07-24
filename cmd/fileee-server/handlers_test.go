@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -20,6 +21,17 @@ import (
 // testAPIToken ist der feste API-Token, mit dem newTestServer den Server aufsetzt — Tests
 // authentifizieren sich damit gegen geschützte Routen.
 const testAPIToken = "test-token-6"
+
+// testJWTWithSub baut ein UNSIGNIERTES, JWT-förmiges Token mit dem gegebenen "sub"-Claim (Header/
+// Payload Base64-URL-kodiertes JSON, dritter Teil ein fester Platzhalter "sig") — analog zu
+// jwtWithSub in fileee/conversations_write_test.go, hier eigenständig definiert, da unexportierte
+// Test-Helfer aus `package fileee` von `package main` aus nicht erreichbar sind. Client.UserID
+// (fileee/auth.go, jwtSub) liest NUR den "sub"-Claim aus, OHNE die Signatur zu prüfen — für Tests
+// genügt deshalb ein unsigniertes Token.
+func testJWTWithSub(sub string) string {
+	enc := func(v any) string { b, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(b) }
+	return "jwt " + enc(map[string]string{"typ": "JWT"}) + "." + enc(map[string]string{"sub": sub}) + ".sig"
+}
 
 // mockRoute ist eine Fixture-Antwort für eine "METHODE /pfad"-Kombination des Mock-Fileee-Servers
 // in diesem Testpaket — analog zu fileee.mockRoute (fileee/mockserver_test.go), hier eigenständig
@@ -98,8 +110,18 @@ func newTestFileeeClient(t *testing.T, routes map[string]mockRoute) (*fileee.Cli
 	t.Cleanup(mockSrv.Close)
 
 	store := fileee.NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))
+	// JSESSIONID trägt bewusst ein JWT-förmiges Token MIT "sub"-Claim (testJWTWithSub, analog
+	// jwtWithSub in fileee/conversations_write_test.go) statt eines beliebigen Strings (Vorzustand
+	// vor Task 11: "test-session") — Client.UserID (fileee/auth.go) liest bevorzugt das
+	// "userId"-Cookie, sonst den "sub"-Claim GENAU dieses Cookies, OHNE Signaturprüfung. Task-11-
+	// Handler (SendMessage/ShareDocument/UnshareDocument, handlers_conversations.go) rufen
+	// UserID intern auf; ein nicht-JWT-förmiger Wert ließ sie zuvor mit einem generischen,
+	// nicht auf einen Sentinel-Fehler abbildbaren "user id not available in session"-Fehler
+	// scheitern (mapError-Default-Fall, 500) — der EnsureSession-Kurzschluss selbst (siehe unten)
+	// bleibt davon unberührt, da ensureSession nur die gespeicherten Cookies + user-session-Mock
+	// prüft, nicht deren Inhalt.
 	seedSession := &fileee.Session{
-		Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: "test-session"}},
+		Cookies: []*http.Cookie{{Name: "JSESSIONID", Value: testJWTWithSub("test-user-1")}},
 		SavedAt: time.Now(),
 	}
 	if err := store.Save(context.Background(), seedSession); err != nil {
@@ -1880,5 +1902,616 @@ func TestResolve_SharedDocument_ZeroDocuments_Returns404(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 11: Konversations-Handler (Chat/Doc/Teilnehmer/Einladungen)
+// ---------------------------------------------------------------------------
+
+// TestListConversations_Success prüft den Happy-Path von GET /v1/conversations: der Mock-Fileee
+// liefert unter dem von Conversations.Diff erwarteten Upstream-Pfad ("POST /api/conversations/rest/
+// diff", fileee/service.go) eine Zeile, der Handler antwortet mit 200 und listet sie im
+// "items"-Feld samt nicht-leerem Folge-Cursor.
+func TestListConversations_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/rest/diff": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"rows":[{"id":"conv-1","version":1,"title":"Rechnung teilen"}],"totalRows":1}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/conversations", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/conversations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out conversationListBody
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als conversationListBody dekodieren: %v", err)
+	}
+	if out.TotalRows != 1 || len(out.Items) != 1 || out.Items[0].ID != "conv-1" {
+		t.Fatalf("out = %+v, want eine Konversation ID=conv-1, TotalRows=1", out)
+	}
+	if out.Cursor == "" {
+		t.Fatalf("Cursor ist leer, want einen kodierten Folge-Cursor")
+	}
+}
+
+// TestListConversations_InvalidCursorReturns400 prüft, dass ein nicht dekodierbarer `cursor`-
+// Parameter mit 400 abgelehnt wird, BEVOR ein Upstream-Request ausgelöst wird (analog
+// decodeCursor-Verhalten bei GET /v1/documents) — routes bleibt bewusst leer, ein Roundtrip darf
+// gar nicht erst stattfinden.
+func TestListConversations_InvalidCursorReturns400(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/conversations?cursor=not-valid-base64!!!", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/conversations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestGetConversation_Success prüft den Happy-Path von GET /v1/conversations/{id} — dünner
+// Durchgriff auf Conversations.Get.
+func TestGetConversation_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"title":"Rechnung teilen"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/conversations/conv-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/conversations/conv-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.Conversation
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.Conversation dekodieren: %v", err)
+	}
+	if out.ID != "conv-1" || out.Title != "Rechnung teilen" {
+		t.Fatalf("out = %+v, want ID=conv-1, Title=Rechnung teilen", out)
+	}
+}
+
+// TestGetConversation_BackendError prüft den Fehlerpfad von GET /v1/conversations/{id}.
+func TestGetConversation_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown conversation"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/conversations/conv-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/conversations/conv-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestListDocumentConversations_Success prüft den Happy-Path von GET /v1/documents/{id}/
+// conversations: Documents.Conversations filtert intern über Conversations.Diff (POST
+// /api/conversations/rest/diff) nach ConversationState.SharedDocumentIDs — von zwei Diff-Zeilen
+// darf nur die mit passender sharedDocumentIds im Ergebnis landen.
+func TestListDocumentConversations_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/rest/diff": {
+			Status: http.StatusOK,
+			Body: []byte(`{"rows":[` +
+				`{"id":"conv-a","version":1,"state":{"sharedDocumentIds":["doc-1"]}},` +
+				`{"id":"conv-b","version":1,"state":{"sharedDocumentIds":["doc-2"]}}` +
+				`],"totalRows":2}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/documents/doc-1/conversations", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/documents/doc-1/conversations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out entityListBody[fileee.Conversation]
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als entityListBody[Conversation] dekodieren: %v", err)
+	}
+	if out.TotalRows != 1 || len(out.Items) != 1 || out.Items[0].ID != "conv-a" {
+		t.Fatalf("out = %+v, want genau eine Konversation ID=conv-a (nur doc-1 geteilt)", out)
+	}
+}
+
+// TestSendMessage_Success prüft den Brief-Pflichtfall für POST /v1/conversations/{id}/messages:
+// Conversations.SendMessage lädt zuerst die Konversation (GET /api/conversations/rest/conv-1,
+// für lastMessageID), postet dann die Chatnachricht (POST .../conv-1/message) und der Handler
+// liefert die vom Mock-Fileee quittierte fileee.SentMessage unverändert im Body.
+func TestSendMessage_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"messages":[]}`),
+		},
+		"POST /api/conversations/rest/conv-1/message": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"conversationId":"conv-1","messageId":"msg-1","messageIndex":0}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/messages", strings.NewReader(`{"text":"Hallo"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/messages: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.SentMessage
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.SentMessage dekodieren: %v", err)
+	}
+	if out.ConversationID != "conv-1" || out.MessageID != "msg-1" {
+		t.Fatalf("out = %+v, want ConversationID=conv-1, MessageID=msg-1", out)
+	}
+}
+
+// TestSendMessage_BackendError prüft den Fehlerpfad von POST /v1/conversations/{id}/messages: das
+// vorgeschaltete Get gelingt, aber der eigentliche message-POST scheitert — Backend-4xx passt
+// unverändert durch mapError durch.
+func TestSendMessage_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"messages":[]}`),
+		},
+		"POST /api/conversations/rest/conv-1/message": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"empty message"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/messages", strings.NewReader(`{"text":""}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/messages: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestShareConversationDocument_Success prüft den Happy-Path von
+// POST /v1/conversations/{id}/documents/{docId} — dünner Durchgriff auf Conversations.
+// ShareDocument (dieselbe message-Route wie SendMessage, aber eine DOCUMENT- statt CHAT-Nachricht).
+func TestShareConversationDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"messages":[]}`),
+		},
+		"POST /api/conversations/rest/conv-1/message": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"conversationId":"conv-1","messageId":"msg-2","messageIndex":1}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/documents/doc-9", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/documents/doc-9: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.SentMessage
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.SentMessage dekodieren: %v", err)
+	}
+	if out.MessageID != "msg-2" {
+		t.Fatalf("out = %+v, want MessageID=msg-2", out)
+	}
+}
+
+// TestShareConversationDocument_BackendError prüft den Fehlerpfad von
+// POST /v1/conversations/{id}/documents/{docId}.
+func TestShareConversationDocument_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"messages":[]}`),
+		},
+		"POST /api/conversations/rest/conv-1/message": {
+			Status: http.StatusNotFound,
+			Body:   []byte(`{"apiError":"NOT_FOUND","errorMessage":"unknown document"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/documents/doc-9", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/documents/doc-9: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestUnshareConversationDocument_Success prüft den Happy-Path von
+// DELETE /v1/conversations/{id}/documents/{docId} — dünner Durchgriff auf Conversations.
+// UnshareDocument (dieselbe message-Route, remove=true statt remove=false).
+func TestUnshareConversationDocument_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"messages":[]}`),
+		},
+		"POST /api/conversations/rest/conv-1/message": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"conversationId":"conv-1","messageId":"msg-3","messageIndex":2}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/conversations/conv-1/documents/doc-9", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/conversations/conv-1/documents/doc-9: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out fileee.SentMessage
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als fileee.SentMessage dekodieren: %v", err)
+	}
+	if out.MessageID != "msg-3" {
+		t.Fatalf("out = %+v, want MessageID=msg-3", out)
+	}
+}
+
+// TestUnshareConversationDocument_BackendError prüft den Fehlerpfad von
+// DELETE /v1/conversations/{id}/documents/{docId}.
+func TestUnshareConversationDocument_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"messages":[]}`),
+		},
+		"POST /api/conversations/rest/conv-1/message": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"cannot unshare"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/conversations/conv-1/documents/doc-9", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/conversations/conv-1/documents/doc-9: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestAddParticipant_Success prüft den Happy-Path von POST /v1/conversations/{id}/participants —
+// dünner Durchgriff auf Conversations.AddParticipant (POST /api/conversations/conv-1/participants/
+// add, fileee/conversations.go postParticipants), 200 ohne Body auf Fileee-Seite → 204 hier.
+func TestAddParticipant_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/conv-1/participants/add": {Status: http.StatusOK},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"email":"empfaenger@example.invalid","role":"VIEWER"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/participants", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/participants: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestAddParticipant_InvalidRoleReturns400 prüft, dass eine unbekannte Rolle MIT 400 abgelehnt
+// wird, BEVOR Conversations.AddParticipant aufgerufen wird — routes bleibt bewusst leer, ein
+// Upstream-Roundtrip darf gar nicht erst stattfinden (isValidConversationRole-Guard).
+func TestAddParticipant_InvalidRoleReturns400(t *testing.T) {
+	_, ts := newTestServer(t, nil)
+
+	body := `{"email":"empfaenger@example.invalid","role":"SUPERADMIN"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/participants", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/participants: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestAddParticipant_BackendError prüft den Fehlerpfad von POST /v1/conversations/{id}/participants
+// mit einer gültigen Rolle (der Upstream-Request findet also statt und scheitert dort).
+func TestAddParticipant_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/conv-1/participants/add": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"invalid email"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	body := `{"email":"not-an-email","role":"VIEWER"}`
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/conv-1/participants", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/conv-1/participants: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestRemoveParticipant_Success prüft den Happy-Path von DELETE /v1/conversations/{id}/
+// participants/{participantId}: Conversations.RemoveParticipant lädt zuerst die Konversation (GET
+// /api/conversations/rest/conv-1, um das volle Participant-Objekt zu finden) und postet dann POST
+// /api/conversations/conv-1/participants/remove.
+func TestRemoveParticipant_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body: []byte(`{"id":"conv-1","version":1,"participants":[` +
+				`{"id":"participant-1","name":"Max Mustermann","type":"EXTERNAL","invited":true,"joined":false}` +
+				`]}`),
+		},
+		"POST /api/conversations/conv-1/participants/remove": {Status: http.StatusOK},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/conversations/conv-1/participants/participant-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/conversations/conv-1/participants/participant-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestRemoveParticipant_BackendError prüft den Fehlerpfad von DELETE /v1/conversations/{id}/
+// participants/{participantId}: das vorgeschaltete Get gelingt (Teilnehmer existiert), aber der
+// eigentliche remove-POST scheitert.
+func TestRemoveParticipant_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body: []byte(`{"id":"conv-1","version":1,"participants":[` +
+				`{"id":"participant-1","name":"Max Mustermann","type":"EXTERNAL","invited":true,"joined":false}` +
+				`]}`),
+		},
+		"POST /api/conversations/conv-1/participants/remove": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"cannot remove"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/conversations/conv-1/participants/participant-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/conversations/conv-1/participants/participant-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestRemoveParticipant_UnknownParticipantReturns404 prüft den in fileee/conversations.go
+// dokumentierten Sonderfall: ist die angefragte participantId NICHT in Conversation.Participants
+// enthalten, liefert RemoveParticipant einen ErrNotFound-wrappenden Fehler, OHNE den remove-POST
+// überhaupt abzusetzen — mapError übersetzt das wie jeden anderen ErrNotFound-Fall zu 404.
+func TestRemoveParticipant_UnknownParticipantReturns404(t *testing.T) {
+	routes := map[string]mockRoute{
+		"GET /api/conversations/rest/conv-1": {
+			Status: http.StatusOK,
+			Body:   []byte(`{"id":"conv-1","version":1,"participants":[]}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodDelete, ts.URL+"/v1/conversations/conv-1/participants/unknown-participant", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE /v1/conversations/conv-1/participants/unknown-participant: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 404, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestListInvitations_Success prüft den Brief-Pflichtfall für GET /v1/conversations/invitations:
+// PendingInvitations liefert (über Conversations.Diff) eine offene Einladung inkl. Conversation.
+// Token — der Handler muss dieses Token unverändert im Response-Body durchreichen, damit ein
+// Aufrufer es direkt an POST /v1/conversations/invitations/accept/{token} weitergeben kann.
+func TestListInvitations_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/rest/diff": {
+			Status: http.StatusOK,
+			Body: []byte(`{"rows":[` +
+				`{"id":"conv-2","version":1,"invitation":true,"token":"inv-tok-1"},` +
+				`{"id":"conv-3","version":1,"invitation":false}` +
+				`],"totalRows":2}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodGet, ts.URL+"/v1/conversations/invitations", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/conversations/invitations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, respBody)
+	}
+	var out entityListBody[fileee.Conversation]
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("Body als entityListBody[Conversation] dekodieren: %v", err)
+	}
+	if out.TotalRows != 1 || len(out.Items) != 1 {
+		t.Fatalf("out = %+v, want genau eine offene Einladung (conv-3 ist keine Einladung)", out)
+	}
+	if out.Items[0].ID != "conv-2" || out.Items[0].Token != "inv-tok-1" {
+		t.Fatalf("out.Items[0] = %+v, want ID=conv-2, Token=inv-tok-1", out.Items[0])
+	}
+}
+
+// TestAcceptInvitation_Success prüft den Brief-Pflichtfall für
+// POST /v1/conversations/invitations/accept/{token} — dünner Durchgriff auf
+// Conversations.AcceptInvitation, 204 ohne Body. Der SERVER-eigene Pfad trägt "accept" VOR {token}
+// (Begründung: registerConversationRoutes, Go-ServeMux-Pattern-Konflikt mit
+// "/v1/conversations/{id}/documents/{docId}") — die Fileee-UPSTREAM-Route bleibt unverändert
+// "POST /api/conversations/invitations/{token}/accept" (fileee/conversations.go).
+func TestAcceptInvitation_Success(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/invitations/inv-tok-1/accept": {Status: http.StatusOK},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/invitations/accept/inv-tok-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/invitations/accept/inv-tok-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestAcceptInvitation_BackendError prüft den Fehlerpfad von
+// POST /v1/conversations/invitations/accept/{token}.
+func TestAcceptInvitation_BackendError(t *testing.T) {
+	routes := map[string]mockRoute{
+		"POST /api/conversations/invitations/inv-tok-1/accept": {
+			Status: http.StatusBadRequest,
+			Body:   []byte(`{"apiError":"BAD_REQUEST","errorMessage":"invalid or expired token"}`),
+		},
+	}
+	_, ts := newTestServer(t, routes)
+
+	req := newAuthedRequest(t, http.MethodPost, ts.URL+"/v1/conversations/invitations/accept/inv-tok-1", nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/conversations/invitations/accept/inv-tok-1: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, respBody)
 	}
 }

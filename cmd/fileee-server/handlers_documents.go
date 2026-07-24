@@ -200,6 +200,15 @@ func decodeCursor(s string) (fileee.Cursor, error) {
 	if s == "" {
 		return fileee.NewCursor(documentCursorEntityType), nil
 	}
+	return decodeCursorToken(s)
+}
+
+// decodeCursorToken dekodiert einen NICHT-leeren, von encodeCursor erzeugten Cursor-Token
+// (Base64-URL ohne Padding, anschließend JSON) — der ressourcen-unabhängige Kern von decodeCursor.
+// Ausgelagert (Task 11), damit decodeConversationsCursor (handlers_conversations.go) dieselbe
+// Dekodierung mit einem anderen Default-EntityType ("Conversation" statt "Document") wiederverwenden
+// kann, ohne die Base64/JSON-Logik zu duplizieren.
+func decodeCursorToken(s string) (fileee.Cursor, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return fileee.Cursor{}, fmt.Errorf("cursor dekodieren: %w", err)
