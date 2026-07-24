@@ -24,6 +24,7 @@ Neues ADR anlegen: Kopiere [`template.md`](template.md) nach `docs/adr/NNNN-slug
 | [0004](0004-test-strategie.md) | Test-Strategie | accepted | 2026-07-23 |
 | [0005](0005-schonender-betrieb-rate-limiting.md) | Schonender Betrieb / Rate-Limiting | accepted | 2026-07-23 |
 | [0006](0006-domaenen-neutralitaet.md) | Domänen-Neutralität | accepted | 2026-07-23 |
+| [0007](0007-ausschluss-destruktiver-operationen.md) | Ausschluss destruktiver und riskanter Operationen | accepted | 2026-07-24 |
 
 ## Status-Werte
 

@@ -1,0 +1,68 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: go build ./...
+      - run: go vet ./...
+      # -race braucht cgo (Race-Detector-Runtime); der Lib-Build selbst bleibt pure-Go
+      # (go build/vet oben laufen mit CGO_ENABLED=0). Nur diese Stufe aktiviert cgo.
+      - name: Test (race + coverage)
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./... -race -coverprofile=cover.out
+      - name: Coverage-Gate (test-coverage-pflicht.md)
+        run: |
+          chmod +x scripts/coverage-gate-strict.sh
+          # Schwellen sind an die tatsächlich gemessene Coverage angelehnt (Stand 2026-07-23,
+          # `go test ./... -coverprofile=cover.out` gegen HEAD von feat/core-lib), NICHT an
+          # aspirationale Zielwerte — ein Gate, das ab Tag 1 rot ist, verliert seine Wirkung
+          # (siehe homelab-management test-coverage-pflicht.md "GOLDENE REGEL"). Jede Schwelle
+          # liegt mit Sicherheitsabstand unter dem gemessenen Wert. Ausnahme mit dokumentiertem
+          # Nachholbedarf: fileee/documenttypes.go — Query()/Get() sind dünne Delegationen ohne
+          # eigenen Test (0.0%), Diff()/queryFallbackDiff() sind hoch getestet (85.7%/90.9%);
+          # Schwelle bewusst niedrig (50%) statt der Business-Logic-Zieltabelle (80%), bis eigene
+          # Tests für Query()/Get() nachgezogen sind.
+          #
+          # WHITELIST (befristete Ausnahme laut homelab-management test-coverage-pflicht.md
+          # "Coverage-Whitelist (kontrollierte Ausnahmen)" — Begründung + Verfallsdatum ≤90 Tage):
+          #   - fileee/auth.go:85            (Zieltabelle: Auth/Permission 90%, real 88.6% zum
+          #     Zeitpunkt der Messung — Sicherheitsabstand statt Ziel, damit das Gate nicht ab
+          #     Tag 1 rot ist)
+          #   - fileee/session.go:60         (Zieltabelle: Auth/Permission 90%, real nur 65.7% —
+          #     größte Lücke der drei Ausnahmen)
+          #   - fileee/documenttypes.go:50   (Zieltabelle: Business-Logic 80%, real 55.3% —
+          #     Query()/Get() sind ungetestete dünne Delegationen, siehe oben)
+          #   Grund: Schwellen bewusst unter der Zieltabelle aus test-coverage-pflicht.md
+          #   ("Business-Logic 80%" / "Auth-Permission 90%"), um das Gate ohne Sofort-Rot
+          #   einzuführen — kein Dauerzustand.
+          #   Verfallsdatum: 2026-10-21 (90 Tage ab 2026-07-23) — bis dahin müssen die drei
+          #   Schwellen auf die Zieltabelle angehoben (Tests nachgezogen) oder das
+          #   Tracking-Issue verlängert/neu bewertet werden.
+          #   Tracking: Coverage-Schwellen auf Umbrella-Spec §9 anheben (auth/session 90,
+          #   documenttypes 80) — https://github.com/strausmann/go-fileee/issues/6
+          ./scripts/coverage-gate-strict.sh cover.out \
+            fileee/auth.go:85 \
+            fileee/session.go:60 \
+            fileee/documents.go:85 \
+            fileee/contacts.go:80 \
+            fileee/tags.go:80 \
+            fileee/companies.go:80 \
+            fileee/documenttypes.go:50 \
+            fileee/query.go:85 \
+            fileee/transport.go:80 \
+            fileee/ratelimit.go:80 \
+            fileee/errors.go:75

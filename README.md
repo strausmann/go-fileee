@@ -1,8 +1,137 @@
 # go-fileee
 
+[![CI](https://github.com/strausmann/go-fileee/actions/workflows/test.yml/badge.svg)](https://github.com/strausmann/go-fileee/actions/workflows/test.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/strausmann/go-fileee/fileee.svg)](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee)
+[![Go Report Card](https://goreportcard.com/badge/github.com/strausmann/go-fileee)](https://goreportcard.com/report/github.com/strausmann/go-fileee)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/strausmann/go-fileee)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Eine **inoffizielle** Go-Client-Library für das **interne** Web-App-API von [Fileee](https://www.fileee.com) (`my.fileee.com`). Fileee bietet kein öffentliches API — diese Library kapselt das Protokoll, das die eigene Web-App verwendet, rekonstruiert aus mitgeschnittenem Netzwerk-Traffic eines eingeloggten eigenen Kontos.
 
 > **Status:** In Entwicklung — privat. Noch keine stabile Version, kein `v0`-Tag, API kann sich jederzeit ändern.
+
+## Über Fileee
+
+[Fileee](https://www.fileee.com) ist ein Dokumentenmanagement-Dienst der fileee GmbH (Deutschland),
+der Papierkram digitalisiert und automatisch ordnet. Belege werden per App gescannt oder importiert;
+eine Texterkennung (OCR) erkennt Dokumenttyp, Absender, Datum und Fristen automatisch, sodass sich
+alles per Volltext durchsuchen lässt. Dazu kommen Fristen-Erinnerungen, Teilen über „fileee Spaces"
+(inkl. Bearbeitungsschutz) sowie Export- und Direkt-Integrationen (u. a. DATEV, lexoffice, SevDesk).
+
+Datenschutz ist ein Kernversprechen: **Hosting in Deutschland, DSGVO-konform**, Dokumente werden
+**individuell verschlüsselt** gespeichert, Zwei-Faktor-Authentifizierung ist verfügbar.
+
+Ergänzt wird der Dienst durch die **fileeeBox** — eine physische Ablagebox mit individuellem
+Barcode: Dokumente werden gescannt und einfach oben in die Box gelegt; die App merkt sich Box und
+Position. Über die Box eingescannte Seiten (bis zu 600) belasten das monatliche Upload-Kontingent
+nicht. Als günstige Selbstbau-Variante gibt es **fileeeDIY** (Druckvorlagen für Schuhkarton/Ordner).
+
+*Diese Library ist ein inoffizielles, unabhängiges Community-Projekt und steht in keiner Verbindung
+zur fileee GmbH.*
+
+## Installation
+
+```bash
+go get github.com/strausmann/go-fileee/fileee
+```
+
+Voraussetzung: Go 1.23 oder neuer.
+
+## Quickstart
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/strausmann/go-fileee/fileee"
+)
+
+func main() {
+	// Credentials aus einer Secret-Quelle laden, nie hartkodieren.
+	client, err := fileee.New(fileee.Credentials{
+		Username: os.Getenv("FILEEE_USERNAME"),
+		Password: os.Getenv("FILEEE_PASSWORD"),
+		TOTPSeed: os.Getenv("FILEEE_TOTP_SEED"), // Base32-Seed, falls Zwei-Faktor aktiv ist
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if err := client.EnsureSession(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	// Volltextsuche -> Dokument-IDs, dann Details laden.
+	res, err := client.Documents.Search(ctx, "Rechnung", fileee.SearchOptions{Limit: 20})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, id := range res.IDs {
+		doc, err := client.Documents.Get(ctx, id)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(doc.ID)
+	}
+}
+```
+
+Credentials gehören nicht in den Quellcode — aus einer Secret-Quelle (Umgebungsvariable, Vault,
+Keyring) laden. Weitere Konfiguration über die `With…`-Optionen von `New` (Rate-Limit, eigener
+`*http.Client`, Session-Store, User-Agent). Vollständige Referenz aller Typen und Methoden:
+[pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee) bzw. `go doc ./fileee`.
+
+## Funktionsumfang
+
+Was die Library aktuell abdeckt und was (noch) nicht. Das Fileee-API ist reverse-engineered; nicht
+abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch nicht implementiert.
+
+**Abgedeckt**
+
+| Bereich | Methoden |
+|---|---|
+| Auth/Session | `Login`, `Logout` (serverseitiger Widerruf + Jar-Clear), `EnsureSession`, automatische Re-Auth, TOTP-2FA, `AccountStatus` |
+| Dokumente | `Documents.Query` / `Diff` / `Get` / `Update` / `Upload`, `Search` (Volltext), `DownloadPDF`, `DownloadPageImage` |
+| Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt), `WaitForProcess` (pollt bis terminal) |
+| Teilen | `Documents.Share` (Freigabe-Link) / `Unshare` |
+| Share-Link nutzen (anonym) | `NewShareClient` → `Resolve(token)` (typisierte `SharedDocument` mit `PageIDs`), `DownloadPageImage` (Seitenbild), `DownloadSharedPage` (Seiten-OCR), `DownloadSharedPDF` (Voll-PDF vom Static-Host) — ohne Login, für N8N-Webhook-Flows; `ShareTokenFromLink` |
+| Dokumenttyp-Felder | `DocumentTypeSchemes` (`Query`/`Diff`/`Get`, `Fields()` je Typ) |
+| OCR-Daten | `Documents.PageOCR` (eigenes Login) / `ShareClient.SharedPageOCR` (anonym) → `[]OCRToken` (Text + Bounding-Box) — für Migrationen (z. B. Paperless-ngx) |
+| Link-Erkennung | `ParseDocumentLink` erkennt intern (`…/documents/:id`) vs. anonym (`…/shared/:token`) |
+| Fehler-Erkennung | `errors.Is(err, ErrRateLimited \| ErrUnsupportedFileType \| ErrNotFound \| ErrDuplicateDocument)`, `BlockedError` (secondsBlocked) |
+| FileeeBoxen | `Boxes.List` / `Get` / `AddDocument` / `RemoveDocument` |
+| Erinnerungen | `Reminders.Query` / `Diff` / `Get` / `Create` |
+| Kontakte | `Contacts.Query` / `Diff` / `Get` / `Create` / `Update` |
+| Stammdaten (read) | `Tags`, `Companies`, `DocumentTypes` (`Query` / `Diff` / `Get`) |
+| Betrieb | Rate-Limiting, Backoff, Session-Persistenz, konfigurierbarer User-Agent |
+
+**Nicht abgedeckt (bewusst ausgelassen)**
+
+| Funktion | Grund |
+|---|---|
+| `revision-lock` (Aufbewahrungssperre) | Kann ein Dokument serverseitig unbrauchbar machen (bei Tests beobachtet) — zu riskant für einen Client, bis das Verhalten geklärt ist |
+| Hartes Löschen von Dokumenten/Kontakten | Destruktiv; nicht Teil des aktuellen Scopes |
+
+**Noch nicht implementiert (geplant/denkbar)**
+
+| Funktion | API |
+|---|---|
+| Teilen an einen Kontakt + Dokument-Chat (Konversation) | Endpunkte gemappt, noch nicht in der Lib: `POST /api/conversations/rest/diff` (Liste), `PUT /api/conversations/rest/:id` (anlegen), `.../participants/add\|remove`, `.../rest/:id/message` (Chat), `conversations/invitations/:id/accept` (Annahme) |
+| Aktive Shares eines Dokuments auflisten | benötigt „Teilen"-Panel-HAR (Link-Freigaben + Konversationen pro Dokument) |
+| „Alle Dateien" ZIP-Datei abholen | Export-Start + Warten bis fertig (`WaitForProcess`) abgedeckt; der finale ZIP-**Byte-Download** noch offen — der Feldname der Download-URL im fertigen `DownloadAllProcess` ist noch nicht verifiziert (finaler Prozess-Snapshot fehlt), wird daher bewusst nicht geraten |
+| Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
+| Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
+| Seiten-Operationen | Merge/Split/Rotate/Extract/Reorder |
+| Tags anlegen/zuweisen, OCR-Text, Live-Push (SSE) | diverse |
+
+> Details zu den Endpunkten: [`docs/API.md`](docs/API.md). Die vollständige Methoden-Referenz steht auf
+> [pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee).
 
 ## Warum
 

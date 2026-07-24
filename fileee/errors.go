@@ -1,0 +1,133 @@
+package fileee
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+)
+
+// Sentinel-Fehler für die häufigsten Fileee-Fehlerfälle (API.md §2.6/§4.1). Aufrufer prüfen mit
+// errors.Is, ob eine Antwort einem dieser Fälle entspricht.
+var (
+	ErrInvalidCredentials = errors.New("fileee: invalid credentials")
+	ErrTwoFactorInvalid   = errors.New("fileee: invalid two-factor token")
+	ErrSessionExpired     = errors.New("fileee: session expired")
+	ErrNotFound           = errors.New("fileee: resource not found")
+	// ErrDuplicateDocument meldet, dass der Server beim Upload ein bereits existierendes Dokument
+	// erkannt hat (die zurückgegebene id weicht von der gesendeten client-id ab). Das UploadResult
+	// ist trotzdem befüllt (Document = das existierende Dokument, IsDuplicate = true).
+	ErrDuplicateDocument = errors.New("fileee: uploaded document already exists")
+	// ErrRateLimited meldet, dass der Server mit HTTP 429 gedrosselt hat (nach Ausschöpfen der
+	// automatischen Retries). Per errors.Is auf einem *APIError prüfbar. Für eine account-weite
+	// Sperre (secondsBlocked) siehe BlockedError.
+	ErrRateLimited = errors.New("fileee: rate limited")
+	// ErrUnsupportedFileType meldet, dass der Upload einen vom Server nicht unterstützten Dateityp
+	// hatte (HTTP 415 / apiError UNSUPPORTED_FILE_TYPE — Fileee akzeptiert PDF, JPEG, PNG).
+	ErrUnsupportedFileType = errors.New("fileee: unsupported file type")
+)
+
+// BlockedError wird zurückgegeben, wenn user-session.secondsBlocked > 0 meldet (API.md §2.8,
+// ADR-0005) — der Aufrufer MUSS warten, kein blindes Retry.
+type BlockedError struct {
+	SecondsBlocked int
+}
+
+func (e *BlockedError) Error() string {
+	return fmt.Sprintf("fileee: account blocked for %ds", e.SecondsBlocked)
+}
+
+// APIError kapselt eine strukturierte Fehlerantwort. Fileee liefert je nach Fall
+// {apiError, errorCode, errorMessage} (z.B. 404) bzw. {apiError, errorMessage, localizedMessage}
+// (z.B. 403 auf /f/exists) — bei 403 auf /diff-Endpunkten teils LEEREN Body (API.md §2.6, LIVE
+// bestätigt part4 2026-07-23).
+type APIError struct {
+	HTTPStatus int
+	Code       string
+	Message    string
+	Localized  string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("fileee: api error %s (http %d): %s", e.Code, e.HTTPStatus, e.Message)
+}
+
+// Is macht bekannte API-Fehler über errors.Is prüfbar (z. B. errors.Is(err, ErrRateLimited)),
+// ohne dass Aufrufer den HTTP-Status oder Code selbst interpretieren müssen.
+func (e *APIError) Is(target error) bool {
+	switch target {
+	case ErrRateLimited:
+		return e.HTTPStatus == http.StatusTooManyRequests
+	case ErrUnsupportedFileType:
+		return e.HTTPStatus == http.StatusUnsupportedMediaType || e.Code == "UNSUPPORTED_FILE_TYPE"
+	case ErrNotFound:
+		return e.HTTPStatus == http.StatusNotFound
+	}
+	return false
+}
+
+// apiErrorBody deckt beide belegten Fehler-Body-Varianten strukturell ab (Felder sind ein
+// Superset — nicht jede Variante befüllt jedes Feld). Zeiger statt Werttypen, damit "Feld fehlt"
+// (nil) von "Feld ist Leerstring" unterscheidbar bleibt.
+//
+// ErrorCode ist bewusst json.RawMessage statt *string: LIVE VERIFIZIERT (2026-07-23, Contacts.Create
+// gegen Testkonto, Antwort {"errorCode":10,"apiError":"IllegalConditions","errorMessage":"..."}) —
+// errorCode kommt hier als JSON-ZAHL, nicht als String. Ein *string-Feldtyp ließ json.Unmarshal an
+// dieser Stelle mit einem Typfehler abbrechen, wodurch parseAPIError den KOMPLETTEN Error-Body
+// (inkl. der eigentlich vorhandenen errorMessage) still verwarf — der Aufrufer sah nur eine leere
+// APIError-Hülle statt der echten Serverfehlermeldung. Gleiches Muster wie Page.ImageVersion
+// (flexInt64, types.go): das reverse-engineerte API liefert denselben Feldnamen je nach Endpunkt/
+// Fehlerfall mal als String, mal als Zahl.
+type apiErrorBody struct {
+	APIError         *string         `json:"apiError"`
+	ErrorCode        json.RawMessage `json:"errorCode"`
+	ErrorMessage     *string         `json:"errorMessage"`
+	LocalizedMessage *string         `json:"localizedMessage"`
+}
+
+// decodeErrorCode liest ErrorCode als String ODER Zahl (siehe apiErrorBody-Kommentar) und liefert
+// die String-Repräsentation. Leer, wenn das Feld fehlt oder in keiner der beiden Formen lesbar ist.
+func decodeErrorCode(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String()
+	}
+	return ""
+}
+
+// parseAPIError liest den Response-Body (falls vorhanden) und baut daraus einen *APIError.
+// Bei leerem oder nicht-JSON Body bleiben Code/Message/Localized leer, HTTPStatus ist trotzdem
+// gesetzt — kein Panic, kein Fehler-Return (defensiv, ADR-0003: reverse-engineertes API liefert
+// nicht immer den erwarteten Body).
+func parseAPIError(status int, body []byte) *APIError {
+	e := &APIError{HTTPStatus: status}
+	if len(body) == 0 {
+		return e
+	}
+	var b apiErrorBody
+	if err := json.Unmarshal(body, &b); err != nil {
+		return e
+	}
+	// errorCode ist das spezifischere Feld (z.B. 404-Fälle liefern beide) — vorrangig
+	// verwenden, sonst auf apiError zurückfallen (z.B. 403-Fälle ohne errorCode).
+	switch {
+	case len(b.ErrorCode) > 0 && string(b.ErrorCode) != "null":
+		e.Code = decodeErrorCode(b.ErrorCode)
+	case b.APIError != nil:
+		e.Code = *b.APIError
+	}
+	if b.ErrorMessage != nil {
+		e.Message = *b.ErrorMessage
+	}
+	if b.LocalizedMessage != nil {
+		e.Localized = *b.LocalizedMessage
+	}
+	return e
+}
