@@ -61,6 +61,7 @@ type Client struct {
 	Contacts      WriteService[Contact]
 	DocumentTypes ReadService[DocumentType]
 	Reminders     ReminderService
+	Boxes         BoxService
 
 	auth       *authClient
 	httpClient *http.Client
@@ -142,6 +143,7 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	c.Contacts = newContactService(c)
 	c.DocumentTypes = newDocumentTypeService(c)
 	c.Reminders = newReminderService(c)
+	c.Boxes = newBoxService(c)
 
 	if sess, err := store.Load(context.Background()); err == nil && sess != nil {
 		loadCookiesIntoJar(jar, cfg.baseURL, sess.Cookies)
@@ -185,6 +187,18 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte) (*http.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fileee: post %s: %w", path, err)
+	}
+	return resp, nil
+}
+
+func (c *Client) deleteReq(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: delete request %s: %w", path, err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: delete %s: %w", path, err)
 	}
 	return resp, nil
 }
