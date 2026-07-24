@@ -37,6 +37,7 @@ func NewExponentialBackoff() *ExponentialBackoff {
 	}
 }
 
+// ShouldRetry entscheidet, ob nach dem Ergebnis eines Versuchs erneut versucht wird.
 func (b *ExponentialBackoff) ShouldRetry(attempt int, resp *http.Response, err error) bool {
 	if attempt >= b.MaxAttempts {
 		return false
@@ -50,6 +51,7 @@ func (b *ExponentialBackoff) ShouldRetry(attempt int, resp *http.Response, err e
 	return resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 }
 
+// NextDelay liefert die Wartezeit vor dem nächsten Versuch.
 func (b *ExponentialBackoff) NextDelay(attempt int) time.Duration {
 	delay := b.BaseDelay << attempt
 	if delay > b.MaxDelay || delay <= 0 {

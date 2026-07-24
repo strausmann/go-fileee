@@ -44,6 +44,7 @@ type contactCreateWire struct {
 	Version              int64         `json:"version"`
 }
 
+// Create legt einen Kontakt an; fehlt entity.ID, wird eine ObjectId erzeugt.
 func (s *contactService) Create(ctx context.Context, entity *Contact) (*Contact, error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
@@ -94,6 +95,7 @@ func (s *contactService) Create(ctx context.Context, entity *Contact) (*Contact,
 	return &created, nil
 }
 
+// Update speichert Änderungen an einem bestehenden Kontakt.
 func (s *contactService) Update(ctx context.Context, entity *Contact) (*Contact, error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err

@@ -30,6 +30,7 @@ type restService[T any] struct {
 	resourcePath string
 }
 
+// Query listet Entitäten über den Query-Endpunkt (paginiert).
 func (s *restService[T]) Query(ctx context.Context, opts QueryOptions) (*QueryResult[T], error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
@@ -109,6 +110,7 @@ func (s *restService[T]) queryIDs(ctx context.Context, opts QueryOptions) (*idQu
 	return &idQueryResult{IDs: ids, TotalRows: wire.TotalRows}, nil
 }
 
+// Diff liefert die Änderungen seit dem übergebenen Cursor.
 func (s *restService[T]) Diff(ctx context.Context, cursor Cursor) (*DiffResult[T], error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
@@ -137,6 +139,7 @@ func (s *restService[T]) Diff(ctx context.Context, cursor Cursor) (*DiffResult[T
 	return decodeDiff[T](respBody, cursor)
 }
 
+// Get lädt eine einzelne Entität anhand ihrer ID.
 func (s *restService[T]) Get(ctx context.Context, id string) (*T, error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err

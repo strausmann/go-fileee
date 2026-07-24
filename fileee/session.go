@@ -33,6 +33,7 @@ type FileSessionStore struct {
 	Path string
 }
 
+// NewFileSessionStore erzeugt einen SessionStore, der die Session als Datei unter path ablegt.
 func NewFileSessionStore(path string) *FileSessionStore {
 	return &FileSessionStore{Path: path}
 }
@@ -47,6 +48,7 @@ func defaultSessionPath() string {
 	return filepath.Join(dir, "fileee", "session.json")
 }
 
+// Load liest die gespeicherte Session; existiert keine Datei, liefert es (nil, nil).
 func (f *FileSessionStore) Load(ctx context.Context) (*Session, error) {
 	data, err := os.ReadFile(f.Path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -62,6 +64,7 @@ func (f *FileSessionStore) Load(ctx context.Context) (*Session, error) {
 	return &s, nil
 }
 
+// Save schreibt die Session atomar auf die Platte.
 func (f *FileSessionStore) Save(ctx context.Context, s *Session) error {
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o700); err != nil {
 		return fmt.Errorf("fileee: session dir create: %w", err)

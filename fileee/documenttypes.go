@@ -16,10 +16,12 @@ func newDocumentTypeService(c *Client) ReadService[DocumentType] {
 	return &documentTypeService{inner: restService[DocumentType]{client: c, resourcePath: "document-types"}}
 }
 
+// Query listet die Dokumenttypen.
 func (s *documentTypeService) Query(ctx context.Context, opts QueryOptions) (*QueryResult[DocumentType], error) {
 	return s.inner.Query(ctx, opts)
 }
 
+// Get lädt einen einzelnen Dokumenttyp anhand seiner ID.
 func (s *documentTypeService) Get(ctx context.Context, id string) (*DocumentType, error) {
 	return s.inner.Get(ctx, id)
 }

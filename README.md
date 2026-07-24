@@ -4,6 +4,62 @@ Eine **inoffizielle** Go-Client-Library für das **interne** Web-App-API von [Fi
 
 > **Status:** In Entwicklung — privat. Noch keine stabile Version, kein `v0`-Tag, API kann sich jederzeit ändern.
 
+## Installation
+
+```bash
+go get github.com/strausmann/go-fileee/fileee
+```
+
+Voraussetzung: Go 1.23 oder neuer.
+
+## Quickstart
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/strausmann/go-fileee/fileee"
+)
+
+func main() {
+	client, err := fileee.New(fileee.Credentials{
+		Username: "user@example.com",
+		Password: "geheim",
+		TOTPSeed: "", // Base32-Seed, falls Zwei-Faktor aktiv ist
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if err := client.EnsureSession(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	// Volltextsuche -> Dokument-IDs, dann Details laden.
+	res, err := client.Documents.Search(ctx, "Rechnung", fileee.SearchOptions{Limit: 20})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, id := range res.IDs {
+		doc, err := client.Documents.Get(ctx, id)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(doc.ID)
+	}
+}
+```
+
+Credentials gehören nicht in den Quellcode — aus einer Secret-Quelle (Umgebungsvariable, Vault,
+Keyring) laden. Weitere Konfiguration über die `With…`-Optionen von `New` (Rate-Limit, eigener
+`*http.Client`, Session-Store, User-Agent). Vollständige Referenz aller Typen und Methoden:
+[pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee) bzw. `go doc ./fileee`.
+
 ## Warum
 
 `go-fileee` ist ein **neutraler, allgemeiner** Go-Client für das Fileee-API: er kapselt Login (inkl. TOTP-2FA), Dokument-Sync, Download und Upload programmatisch — ohne Bindung an ein bestimmtes Ziel- oder Fremdsystem. Damit lässt sich Fileee für viele Zwecke automatisieren:

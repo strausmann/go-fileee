@@ -22,14 +22,17 @@ func newDocumentService(c *Client) *DocumentService {
 	return &DocumentService{inner: restService[Document]{client: c, resourcePath: "documents"}, client: c}
 }
 
+// Query listet Dokumente über den Query-Endpunkt (paginiert).
 func (s *DocumentService) Query(ctx context.Context, opts QueryOptions) (*QueryResult[Document], error) {
 	return s.inner.Query(ctx, opts)
 }
 
+// Diff liefert die Änderungen seit dem übergebenen Cursor.
 func (s *DocumentService) Diff(ctx context.Context, cursor Cursor) (*DiffResult[Document], error) {
 	return s.inner.Diff(ctx, cursor)
 }
 
+// Get lädt ein einzelnes Dokument anhand seiner ID.
 func (s *DocumentService) Get(ctx context.Context, id string) (*Document, error) {
 	return s.inner.Get(ctx, id)
 }

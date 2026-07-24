@@ -23,16 +23,30 @@ type clientConfig struct {
 	userAgent    string
 }
 
+// Option konfiguriert einen Client bei New.
 type Option func(*clientConfig)
 
-func WithHTTPClient(hc *http.Client) Option  { return func(c *clientConfig) { c.httpClient = hc } }
-func WithBaseURL(url string) Option          { return func(c *clientConfig) { c.baseURL = url } }
+// WithHTTPClient übernimmt Timeout und Transport eines eigenen *http.Client. Der Cookie-Jar wird
+// von der Lib gestellt und nicht überschrieben.
+func WithHTTPClient(hc *http.Client) Option { return func(c *clientConfig) { c.httpClient = hc } }
+
+// WithBaseURL überschreibt die Basis-URL (Default: https://my.fileee.com), etwa für Tests.
+func WithBaseURL(url string) Option { return func(c *clientConfig) { c.baseURL = url } }
+
+// WithSessionStore setzt den Persistenz-Store für den Session-Cookie-Jar (Default: Datei im
+// Nutzerprofil).
 func WithSessionStore(s SessionStore) Option { return func(c *clientConfig) { c.sessionStore = s } }
+
+// WithRateLimit konfiguriert den Token-Bucket: rps Requests pro Sekunde mit der Spitze burst.
 func WithRateLimit(rps float64, burst int) Option {
 	return func(c *clientConfig) { c.rps = rps; c.burst = burst }
 }
+
+// WithBackoff setzt die Retry-Strategie für 429/5xx und Netzwerkfehler.
 func WithBackoff(policy BackoffPolicy) Option { return func(c *clientConfig) { c.backoff = policy } }
-func WithLogger(l *slog.Logger) Option        { return func(c *clientConfig) { c.logger = l } }
+
+// WithLogger setzt den Logger der Lib (Default: verwirft alle Ausgaben).
+func WithLogger(l *slog.Logger) Option { return func(c *clientConfig) { c.logger = l } }
 
 // WithUserAgent setzt einen Konsumenten-User-Agent (z. B. "paperless-scan-bridge/2.0"). Die
 // Lib-Kennung "go-fileee/<version>" wird IMMER angehängt — Fileee sieht Konsument UND Lib.
@@ -136,9 +150,16 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
-func (c *Client) Login(ctx context.Context) error         { return c.auth.login(ctx) }
-func (c *Client) Logout(ctx context.Context) error        { return c.auth.logout(ctx) }
+// Login führt einen vollständigen Passwort- (und ggf. TOTP-)Login durch.
+func (c *Client) Login(ctx context.Context) error { return c.auth.login(ctx) }
+
+// Logout beendet die Session serverseitig und leert den lokalen Cookie-Jar.
+func (c *Client) Logout(ctx context.Context) error { return c.auth.logout(ctx) }
+
+// EnsureSession stellt sicher, dass eine gültige Session besteht, und authentifiziert bei Bedarf neu.
 func (c *Client) EnsureSession(ctx context.Context) error { return c.auth.EnsureSession(ctx) }
+
+// AccountStatus liefert Abo- und Lizenzinformationen des Kontos.
 func (c *Client) AccountStatus(ctx context.Context) (*AccountStatus, error) {
 	return c.auth.accountStatus(ctx)
 }

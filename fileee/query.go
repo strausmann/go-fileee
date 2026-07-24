@@ -49,6 +49,7 @@ type SortField struct {
 	NullsFirst bool
 }
 
+// QueryResult ist das Ergebnis einer Query: die Zeilen und die Gesamtzahl.
 type QueryResult[T any] struct {
 	Rows      []T
 	TotalRows int
@@ -160,10 +161,12 @@ type Cursor struct {
 	Known      map[string]int64
 }
 
+// NewCursor erzeugt einen leeren Cursor für den angegebenen Entitätstyp.
 func NewCursor(entityType string) Cursor {
 	return Cursor{EntityType: entityType, Known: map[string]int64{}}
 }
 
+// Clone liefert eine tiefe Kopie des Cursors.
 func (c Cursor) Clone() Cursor {
 	known := make(map[string]int64, len(c.Known))
 	for k, v := range c.Known {
@@ -172,6 +175,7 @@ func (c Cursor) Clone() Cursor {
 	return Cursor{EntityType: c.EntityType, Known: known}
 }
 
+// DiffResult ist das Ergebnis eines Diffs: geänderte Zeilen, gelöschte IDs und der Folge-Cursor.
 type DiffResult[T any] struct {
 	Rows       []T
 	DeletedIDs []string

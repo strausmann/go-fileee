@@ -598,11 +598,13 @@ func (d DocumentAttributes) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// Money ist ein Geldbetrag mit ISO-Währungscode.
 type Money struct {
 	Value    float64 `json:"value"`
 	Currency string  `json:"currency"`
 }
 
+// BankAccount ist eine aus einem Dokument extrahierte Bankverbindung.
 type BankAccount struct {
 	IBAN          string `json:"iban"`
 	BIC           string `json:"bic"`
@@ -610,6 +612,7 @@ type BankAccount struct {
 	AccountHolder string `json:"account_holder"`
 }
 
+// UploadAttribute beschreibt Herkunft und Metadaten eines hochgeladenen Dokuments.
 type UploadAttribute struct {
 	OriginalFileName string                     `json:"originalFileName"`
 	OriginalFileType string                     `json:"originalFileType"`
@@ -619,6 +622,7 @@ type UploadAttribute struct {
 	UploadMetaData   map[string]json.RawMessage `json:"uploadMetaData"`
 }
 
+// Tag ist ein Schlagwort, mit dem Dokumente kategorisiert werden.
 type Tag struct {
 	ID              string `json:"id"`
 	Version         int64  `json:"version"`
@@ -735,6 +739,7 @@ type documentAttributesEnvelopeCompany struct {
 	Data CompanyAttributes `json:"data"`
 }
 
+// Address ist eine Postanschrift eines Kontakts.
 type Address struct {
 	Street        string `json:"street"`
 	SecondLine    string `json:"secondLine"`
