@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
@@ -143,5 +144,109 @@ func TestConversations_ShareDocument(t *testing.T) {
 	msg, _ := captured["message"].(map[string]any)
 	if msg["type"] != "DOCUMENT" || msg["documentId"] != "doc-42" || msg["remove"] != false {
 		t.Errorf("DOCUMENT-Nachricht falsch: type=%v documentId=%v remove=%v", msg["type"], msg["documentId"], msg["remove"])
+	}
+}
+
+func convAuthMock(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/f/start":
+			http.SetCookie(w, &http.Cookie{Name: "XSRF-TOKEN", Value: "x"})
+			w.WriteHeader(204)
+		case "/api/f/existent":
+			w.Write([]byte(`{"existent":true,"twoFactorAuthEnabled":false}`))
+		case "/api/f/token/login":
+			w.WriteHeader(401)
+		case "/api/f/login":
+			http.SetCookie(w, &http.Cookie{Name: "JSESSIONID", Value: jwtWithSub("u-me")})
+			w.Write([]byte(`{"loggedIn":true}`))
+		case "/api/f/user-session":
+			w.Write([]byte(`{"authorized":true}`))
+		default:
+			handler(w, r)
+		}
+	}
+}
+
+func convTestClient(t *testing.T, srv *httptest.Server) *Client {
+	t.Helper()
+	c, err := New(Credentials{Username: "u@example.invalid", Password: "p"},
+		WithBaseURL(srv.URL), WithRateLimit(1000, 1000),
+		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestConversations_AddParticipant(t *testing.T) {
+	var captured map[string]any
+	srv := newMockServer(t, convAuthMock(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/conversations/c1/participants/add" {
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			_ = json.Unmarshal(b, &captured)
+			w.Write([]byte(`{}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	c := convTestClient(t, srv)
+	if err := c.Conversations.AddParticipant(context.Background(), "c1", "julia@example.invalid", ConversationRoleViewer); err != nil {
+		t.Fatalf("AddParticipant: %v", err)
+	}
+	ps, _ := captured["participants"].([]any)
+	if len(ps) != 1 {
+		t.Fatalf("participants falsch: %+v", captured)
+	}
+	p := ps[0].(map[string]any)
+	if p["id"] != "julia@example.invalid" || p["type"] != "EXTERNAL" || p["role"] != "VIEWER" {
+		t.Errorf("participant falsch: %+v", p)
+	}
+	if captured["resendInvitationEmail"] != false {
+		t.Errorf("resendInvitationEmail = %v", captured["resendInvitationEmail"])
+	}
+}
+
+func TestConversations_RemoveParticipant(t *testing.T) {
+	var captured map[string]any
+	srv := newMockServer(t, convAuthMock(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/conversations/rest/c1":
+			w.Write([]byte(`{"id":"c1","participants":[{"id":"p-x","name":"Weg","type":"USER","invited":true,"joined":false,"conversationPermissions":["CHAT"]}]}`))
+		case "/api/conversations/c1/participants/remove":
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			_ = json.Unmarshal(b, &captured)
+			w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	c := convTestClient(t, srv)
+	if err := c.Conversations.RemoveParticipant(context.Background(), "c1", "p-x"); err != nil {
+		t.Fatalf("RemoveParticipant: %v", err)
+	}
+	ps, _ := captured["participants"].([]any)
+	if len(ps) != 1 || ps[0].(map[string]any)["id"] != "p-x" {
+		t.Fatalf("remove participant falsch: %+v", captured)
+	}
+	if captured["keepDocuments"] != false || captured["keepHistory"] != false {
+		t.Errorf("keep-Flags falsch: %+v", captured)
+	}
+}
+
+func TestConversations_RemoveParticipant_NotFound(t *testing.T) {
+	srv := newMockServer(t, convAuthMock(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/conversations/rest/c1" {
+			w.Write([]byte(`{"id":"c1","participants":[]}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	c := convTestClient(t, srv)
+	err := c.Conversations.RemoveParticipant(context.Background(), "c1", "ghost")
+	if err == nil {
+		t.Fatal("erwartet Fehler bei unbekanntem Teilnehmer")
 	}
 }

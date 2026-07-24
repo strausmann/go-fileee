@@ -23,10 +23,44 @@ type Conversation struct {
 	Version            int64             `json:"version"`
 	Created            string            `json:"created,omitempty"`
 	Modified           string            `json:"modified,omitempty"`
-	// Messages bleiben roh: die Nachrichtenstruktur variiert (Text, geteilte Dokumente,
-	// System-Ereignisse) und wird bei Bedarf vom Aufrufer dekodiert.
-	Messages []json.RawMessage `json:"messages,omitempty"`
+	// Messages sind die Chat-/System-Nachrichten der Konversation (aufsteigend). Message hält die
+	// gemeinsamen Felder typisiert und das vollständige JSON in Raw.
+	Messages []Message `json:"messages,omitempty"`
 }
+
+// Message ist eine einzelne Nachricht einer Konversation. Type bestimmt die Bedeutung: CHAT
+// (Text in Text), DOCUMENT (geteiltes Dokument in DocumentID, Remove=true beim Entfernen),
+// PARTICIPANT_STATE (Teilnehmer beigetreten/entfernt), META_INFORMATION (System). Direction
+// FROM_USER = vom eigenen Konto gesendet, TO_USER = von einem anderen Teilnehmer empfangen (eine
+// Antwort). Raw enthält das vollständige Nachrichten-JSON.
+type Message struct {
+	ID         string          `json:"id"`
+	Direction  string          `json:"direction"`
+	Timestamp  string          `json:"timestamp"`
+	Text       string          `json:"message"`
+	Type       string          `json:"type"`
+	SenderID   string          `json:"senderId"`
+	SenderName string          `json:"senderName"`
+	DocumentID string          `json:"documentId,omitempty"`
+	Remove     bool            `json:"remove,omitempty"`
+	Raw        json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON dekodiert die typisierten Felder und bewahrt das vollständige JSON in Raw.
+func (m *Message) UnmarshalJSON(b []byte) error {
+	type alias Message
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*m = Message(a)
+	m.Raw = append(json.RawMessage(nil), b...)
+	return nil
+}
+
+// IsReply meldet, ob die Nachricht eine eingehende Text-Antwort eines anderen Teilnehmers ist
+// (Type CHAT, Direction TO_USER) — der typische Trigger für einen N8N-Workflow.
+func (m Message) IsReply() bool { return m.Type == "CHAT" && m.Direction == "TO_USER" }
 
 // Participant ist ein Teilnehmer einer Konversation. Invited/Joined sind Booleans (LIVE verifiziert
 // 2026-07-24): Invited = eingeladen, Joined = beigetreten/angenommen. Type ist USER (Fileee-Nutzer)
@@ -68,7 +102,18 @@ type ConversationService interface {
 	ShareDocument(ctx context.Context, conversationID, documentID string) (*SentMessage, error)
 	// UnshareDocument entfernt ein geteiltes Dokument wieder aus der Konversation.
 	UnshareDocument(ctx context.Context, conversationID, documentID string) (*SentMessage, error)
+	// AddParticipant lädt einen externen Empfänger per E-Mail in die Konversation ein.
+	AddParticipant(ctx context.Context, conversationID, email, role string) error
+	// RemoveParticipant entfernt einen Teilnehmer (per ID) aus der Konversation.
+	RemoveParticipant(ctx context.Context, conversationID, participantID string) error
 }
+
+// Konversations-Rollen für AddParticipant.
+const (
+	ConversationRoleViewer = "VIEWER"
+	ConversationRoleEditor = "EDITOR"
+	ConversationRoleAdmin  = "ADMIN"
+)
 
 // SentMessage ist die Server-Antwort auf eine gesendete Nachricht.
 type SentMessage struct {
@@ -273,11 +318,110 @@ func lastMessageID(c *Conversation) string {
 	if len(c.Messages) == 0 {
 		return ""
 	}
-	var m struct {
-		ID string `json:"id"`
+	return c.Messages[len(c.Messages)-1].ID
+}
+
+// addParticipantsWire / addParticipantWire: Body von POST …/participants/add (Live belegt).
+type addParticipantWire struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Type        string         `json:"type"`
+	Role        string         `json:"role"`
+	Kind        *string        `json:"kind"`
+	PhoneNumber string         `json:"phoneNumber"`
+	ExternalID  *string        `json:"externalId"`
+	Joined      bool           `json:"joined"`
+	Invited     bool           `json:"invited"`
+	Attributes  map[string]any `json:"attributes"`
+}
+
+type addParticipantsWire struct {
+	Participants          []addParticipantWire `json:"participants"`
+	ResendInvitationEmail bool                 `json:"resendInvitationEmail"`
+}
+
+// AddParticipant lädt einen externen Empfänger per E-Mail (type EXTERNAL) mit der gegebenen Rolle
+// (ConversationRole*) in die Konversation ein.
+func (s *conversationService) AddParticipant(ctx context.Context, conversationID, email, role string) error {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return err
 	}
-	_ = json.Unmarshal(c.Messages[len(c.Messages)-1], &m)
-	return m.ID
+	body := addParticipantsWire{Participants: []addParticipantWire{{
+		ID: email, Name: email, Type: "EXTERNAL", Role: role,
+		PhoneNumber: "", Joined: true, Invited: false, Attributes: map[string]any{},
+	}}}
+	return s.postParticipants(ctx, conversationID, "add", body)
+}
+
+// removeParticipantWire / removeParticipantsWire: Body von POST …/participants/remove (Live belegt).
+type removeParticipantWire struct {
+	ID                      string         `json:"id"`
+	Name                    string         `json:"name"`
+	Type                    string         `json:"type"`
+	PhoneNumber             string         `json:"phoneNumber"`
+	Joined                  bool           `json:"joined"`
+	Invited                 bool           `json:"invited"`
+	ConversationPermissions []string       `json:"conversationPermissions"`
+	Attributes              map[string]any `json:"attributes"`
+}
+
+type removeParticipantsWire struct {
+	Participants  []removeParticipantWire `json:"participants"`
+	KeepDocuments bool                    `json:"keepDocuments"`
+	KeepHistory   bool                    `json:"keepHistory"`
+}
+
+// RemoveParticipant entfernt den Teilnehmer mit der gegebenen ID aus der Konversation (das volle
+// Teilnehmer-Objekt wird dazu aus der Konversation geladen).
+func (s *conversationService) RemoveParticipant(ctx context.Context, conversationID, participantID string) error {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return err
+	}
+	conv, err := s.Get(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	var found *Participant
+	for i := range conv.Participants {
+		if conv.Participants[i].ID == participantID {
+			found = &conv.Participants[i]
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("fileee: participant %q not in conversation: %w", participantID, ErrNotFound)
+	}
+	attrs := found.Attributes
+	if attrs == nil {
+		attrs = map[string]any{}
+	}
+	body := removeParticipantsWire{Participants: []removeParticipantWire{{
+		ID: found.ID, Name: found.Name, Type: found.Type, PhoneNumber: found.PhoneNumber,
+		Joined: found.Joined, Invited: found.Invited,
+		ConversationPermissions: found.ConversationPermissions, Attributes: attrs,
+	}}}
+	return s.postParticipants(ctx, conversationID, "remove", body)
+}
+
+// postParticipants sendet einen participants/add- bzw. -remove-Request und prüft den Status.
+func (s *conversationService) postParticipants(ctx context.Context, conversationID, action string, body any) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("fileee: participants %s encode: %w", action, err)
+	}
+	resp, err := s.client.postJSON(ctx, "/api/conversations/"+conversationID+"/participants/"+action, raw)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("fileee: participants %s read: %w", action, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return parseAPIError(resp.StatusCode, respBody)
+	}
+	return nil
 }
 
 // Conversations liefert alle Konversationen, in denen das Dokument geteilt ist (Filter über
