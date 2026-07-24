@@ -21,12 +21,29 @@ type Conversation struct {
 	Roles              map[string]string `json:"roles"`
 	State              ConversationState `json:"state"`
 	Invitation         bool              `json:"invitation"`
-	Version            int64             `json:"version"`
+	// Token ist der Invitation-Token — NUR bei einer offenen Einladung aus Sicht des eingeladenen
+	// Kontos gesetzt (leer, sobald beigetreten). Direkt an AcceptInvitation übergeben.
+	Token   string `json:"token,omitempty"`
+	Version int64  `json:"version"`
 	Created            string            `json:"created,omitempty"`
 	Modified           string            `json:"modified,omitempty"`
 	// Messages sind die Chat-/System-Nachrichten der Konversation (aufsteigend). Message hält die
 	// gemeinsamen Felder typisiert und das vollständige JSON in Raw.
 	Messages []Message `json:"messages,omitempty"`
+	// Raw enthält das vollständige Konversations-JSON (für Felder, die dieser Typ nicht modelliert).
+	Raw json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON dekodiert die typisierten Felder und bewahrt zusätzlich das vollständige JSON in Raw.
+func (c *Conversation) UnmarshalJSON(b []byte) error {
+	type alias Conversation
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*c = Conversation(a)
+	c.Raw = append(json.RawMessage(nil), b...)
+	return nil
 }
 
 // Message ist eine einzelne Nachricht einer Konversation. Type bestimmt die Bedeutung: CHAT
@@ -117,15 +134,13 @@ type ConversationService interface {
 	AddParticipant(ctx context.Context, conversationID, email, role string) error
 	// RemoveParticipant entfernt einen Teilnehmer (per ID) aus der Konversation.
 	RemoveParticipant(ctx context.Context, conversationID, participantID string) error
-	// PendingInvitations liefert die Konversationen mit einer offenen Einladung an das eigene Konto.
-	// LIVE verifiziert.
+	// PendingInvitations liefert die Konversationen mit einer offenen Einladung an das eigene Konto;
+	// jede trägt in Conversation.Token den Invitation-Token für AcceptInvitation. LIVE verifiziert.
 	PendingInvitations(ctx context.Context) ([]Conversation, error)
 	// AcceptInvitation nimmt eine Einladung über ihren Invitation-Token an (POST
-	// /api/conversations/invitations/:token/accept). ACHTUNG: der Parameter ist NICHT die
-	// Conversation-ID (das quittiert der Server mit 404) — der Token stammt aus dem Einladungslink/
-	// der Einladungs-E-Mail. Wie der Token programmatisch aus einer offenen Einladung zu beziehen
-	// ist, ist noch nicht verifiziert (PendingInvitations liefert die Konversation, aber nicht den
-	// Token).
+	// /api/conversations/invitations/:token/accept). Der Token ist Conversation.Token einer offenen
+	// Einladung aus PendingInvitations — NICHT die Conversation-ID (die quittiert der Server mit 404).
+	// LIVE verifiziert (End-to-End als eingeladenes Konto).
 	AcceptInvitation(ctx context.Context, invitationToken string) error
 }
 
@@ -448,8 +463,8 @@ type acceptInvitationWire struct {
 }
 
 // AcceptInvitation nimmt eine Einladung über ihren Invitation-Token an
-// (POST /api/conversations/invitations/:token/accept). Der Token stammt aus dem Einladungslink/der
-// Einladungs-E-Mail (NICHT die Conversation-ID). Live-belegtes Body-Format.
+// (POST /api/conversations/invitations/:token/accept). Der Token ist Conversation.Token einer
+// offenen Einladung (PendingInvitations), NICHT die Conversation-ID. LIVE end-to-end verifiziert.
 func (s *conversationService) AcceptInvitation(ctx context.Context, invitationToken string) error {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return err
