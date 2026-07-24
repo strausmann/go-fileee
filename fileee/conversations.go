@@ -463,12 +463,12 @@ func (s *conversationService) AcceptInvitation(ctx context.Context, invitationTo
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("fileee: accept invitation read: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return parseAPIError(resp.StatusCode, body)
+		return parseAPIError(resp.StatusCode, respBody)
 	}
 	return nil
 }
