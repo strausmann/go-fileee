@@ -1,0 +1,12 @@
+# fileee-server Access-Log (NGINX-combined auf stdout) -> crowdsecurity/nginx
+source: docker
+container_name:
+  - fileee-server            # tatsächlichen Container-Namen einsetzen
+labels:
+  type: nginx                # routet an crowdsecurity/nginx (http-bruteforce/http-probing)
+# Voraussetzungen: CrowdSec-Agent hat Docker-Socket-Zugriff; Log-Driver json-file;
+#   CROWDSEC_COLLECTIONS enthält crowdsecurity/nginx.
+# Deploy-Verifikation (PFLICHT): `cscli metrics` -> lines_parsed>0 (nicht nur read);
+#   Positiv: 20x curl mit falschem X-API-Key -> `cscli alerts/decisions list` zeigt Ban.
+# Fallback, falls docker-source hier nicht parst: Access-Log zusätzlich in Datei +
+#   source: file / filenames: [...] / labels: {type: nginx}.

@@ -1,0 +1,91 @@
+# Referenz-Template — echtes GitOps folgt in infrastructure/docker/fileee-server.
+#
+# fileee-server OHNE Reverse Proxy: direkt erreichbar auf Port 8080 (oder nur im
+# internen Docker-Netz, siehe Kommentar unten) — die einzige Auth-Schicht ist
+# der statische API-Token (FILEEE_API_TOKEN). Gedacht für N8N/CI, die den
+# Container direkt im selben Docker-Netz oder via Tailscale/LAN ansprechen.
+#
+# ACHTUNG Secrets: Alle "CHANGE_ME"-Platzhalter MÜSSEN vor dem Start durch echte
+# Werte ersetzt werden (produktiv bevorzugt über Vaultwarden/Infisical injizieren,
+# NIE Klartext-Secrets in eine committete .env-Datei schreiben).
+#
+# ACHTUNG Rootless-Volume: Der Container läuft als uid 65532 (distroless
+# "nonroot"). Das Volume für FILEEE_SESSION_PATH (Default
+# /home/nonroot/session.json) MUSS von uid 65532 beschreibbar sein — bei
+# einem Host-Bind-Mount vor dem ersten Start einmalig:
+#   sudo mkdir -p <host-pfad> && sudo chown 65532:65532 <host-pfad>
+# Bei einem benannten Docker-Volume (wie unten) übernimmt der Docker-Daemon das
+# Anlegen automatisch mit root-Ownership — trotzdem beim ersten Start prüfen
+# (`docker exec` funktioniert hier NICHT, da distroless keine Shell hat; im
+# Zweifel testweise mit einem Debug-Image auf dasselbe Volume mounten und dort
+# `chown 65532:65532 /data` ausführen).
+
+services:
+  fileee-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # image: git.strausmann.de/infrastructure/docker/fileee-server:latest  # GitOps-Alternative zu `build`
+    container_name: fileee-server
+    restart: unless-stopped
+
+    # Ohne Reverse Proxy direkt auf dem Host erreichbar. Für rein internen
+    # Betrieb (N8N/CI im selben Docker-Netz) stattdessen den Port NICHT
+    # veröffentlichen und die Zeile "ports:" komplett entfernen — dann ist der
+    # Container nur über den Service-Namen im gemeinsamen Docker-Netz erreichbar.
+    ports:
+      - "8080:8080"
+
+    environment:
+      # --- Fileee-Konto (Pflicht) ------------------------------------------
+      FILEEE_USERNAME: "CHANGE_ME"
+      FILEEE_PASSWORD: "CHANGE_ME"
+      FILEEE_TOTP_SEED: "" # Base32-TOTP-Seed, nur bei 2FA-Konten — sonst leer lassen
+      FILEEE_API_TOKEN: "CHANGE_ME" # statisches Bearer-Token für Clients (z. B. N8N)
+
+      # --- Verhalten ---------------------------------------------------------
+      FILEEE_ALLOW_DESTRUCTIVE: "false" # true schaltet Löschen/destruktive Ops frei
+      FILEEE_LISTEN_ADDR: ":8080"
+      FILEEE_SESSION_PATH: "/home/nonroot/session.json"
+      FILEEE_KEEPALIVE_INTERVAL: "15m"
+      FILEEE_WAIT_TIMEOUT: "60s"
+      FILEEE_WAIT_MAX: "300s"
+      FILEEE_RATE_RPS: "1"
+      FILEEE_RATE_BURST: "3"
+      FILEEE_TRUSTED_PROXIES: "" # kommagetrennte IPs/CIDRs, nur hinter Reverse Proxy nötig
+      FILEEE_CLIENT_IP_HEADERS: "CF-Connecting-IP,X-Real-IP,X-Forwarded-For"
+      FILEEE_DOCS_PUBLIC: "true" # /docs (OpenAPI) ohne Token erreichbar
+      FILEEE_MAX_UPLOAD_SIZE: "33554432" # 32 MiB
+      FILEEE_WEBHOOK_URL: "" # leer = Webhooks deaktiviert
+      FILEEE_WEBHOOK_SECRET: ""
+      FILEEE_WATCH_INTERVAL: "0" # 0 = Änderungs-Watcher deaktiviert
+      FILEEE_USER_AGENT: "" # leer = Core-Lib-Default
+      FILEEE_LOG_LEVEL: "info"
+
+      # --- Secret-Backend: ENV-Modus (Default für dieses Sample) --------------
+      SECRET_BACKEND: "env"
+
+      # --- Secret-Backend: Infisical-Dual-Mode (Alternative, siehe Spec §9) ---
+      # Zum Aktivieren: FILEEE_USERNAME/PASSWORD/API_TOKEN/TOTP_SEED oben
+      # entfernen (kommen dann aus Infisical) und stattdessen:
+      # SECRET_BACKEND: "infisical"
+      # INFISICAL_UNIVERSAL_AUTH_CLIENT_ID: "CHANGE_ME"
+      # INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET: "CHANGE_ME"
+      # INFISICAL_DOMAIN: "https://secretsmanager.strausmann.cloud/api" # Pflicht: MIT /api
+      # INFISICAL_PROJECT_ID: "CHANGE_ME"
+      # INFISICAL_ENV: "prod" # Pflicht im Infisical-Modus (CLI-Default wäre sonst "dev")
+      # INFISICAL_PATH: "/fileee-server"
+
+    volumes:
+      - fileee-server-session:/home/nonroot
+      - /etc/localtime:/etc/localtime:ro
+
+    healthcheck:
+      test: ["CMD", "/fileee-server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  fileee-server-session:

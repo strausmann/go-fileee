@@ -1,0 +1,95 @@
+# Referenz-Template — echtes GitOps folgt in infrastructure/docker/fileee-server.
+#
+# fileee-server ÖFFENTLICH über Traefik (Alternative zu Pangolin, z. B. wenn
+# kein Pangolin-Newt auf dem Ziel-Node läuft). Router auf dem "websecure"
+# Entrypoint mit TLS, optionale Basic-Auth-Middleware als zusätzliche Kante —
+# das eigentliche Auth-Gate bleibt FILEEE_API_TOKEN (Bearer, serverseitig).
+#
+# ACHTUNG Secrets: "CHANGE_ME"-Platzhalter vor dem Start ersetzen. Das
+# Basic-Auth-Htpasswd-Fragment unten ist NUR ein Platzhalter-Beispiel — mit
+# `htpasswd -nbB claude-automation CHANGE_ME` ein echtes Fragment erzeugen und
+# NIEMALS das erzeugte Fragment im Klartext committen.
+#
+# ACHTUNG Rootless-Volume: siehe compose.plain.yaml — FILEEE_SESSION_PATH muss
+# von uid 65532 beschreibbar sein.
+
+services:
+  fileee-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # image: git.strausmann.de/infrastructure/docker/fileee-server:latest  # GitOps-Alternative zu `build`
+    container_name: fileee-server
+    restart: unless-stopped
+
+    environment:
+      FILEEE_USERNAME: "CHANGE_ME"
+      FILEEE_PASSWORD: "CHANGE_ME"
+      FILEEE_TOTP_SEED: ""
+      FILEEE_API_TOKEN: "CHANGE_ME"
+      FILEEE_ALLOW_DESTRUCTIVE: "false"
+      FILEEE_LISTEN_ADDR: ":8080"
+      FILEEE_SESSION_PATH: "/home/nonroot/session.json"
+      FILEEE_KEEPALIVE_INTERVAL: "15m"
+      FILEEE_WAIT_TIMEOUT: "60s"
+      FILEEE_WAIT_MAX: "300s"
+      FILEEE_RATE_RPS: "1"
+      FILEEE_RATE_BURST: "3"
+      FILEEE_TRUSTED_PROXIES: "" # ggf. Traefik-Container-IP/CIDR eintragen, wenn Traefik im selben Compose-Netz läuft
+      FILEEE_CLIENT_IP_HEADERS: "CF-Connecting-IP,X-Real-IP,X-Forwarded-For"
+      FILEEE_DOCS_PUBLIC: "true"
+      FILEEE_MAX_UPLOAD_SIZE: "33554432"
+      FILEEE_WEBHOOK_URL: ""
+      FILEEE_WEBHOOK_SECRET: ""
+      FILEEE_WATCH_INTERVAL: "0"
+      FILEEE_USER_AGENT: ""
+      FILEEE_LOG_LEVEL: "info"
+      SECRET_BACKEND: "env"
+      # Infisical-Alternative: siehe compose.plain.yaml (identisches Muster).
+
+    volumes:
+      - fileee-server-session:/home/nonroot
+      - /etc/localtime:/etc/localtime:ro
+
+    healthcheck:
+      test: ["CMD", "/fileee-server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # Kein "ports:" — Traefik erreicht den Container über das gemeinsame
+    # externe Netz "traefik-public" (Docker Compose external network, siehe
+    # CLAUDE.md Konvention "Docker Compose").
+    networks:
+      - traefik-public
+
+    labels:
+      - "traefik.enable=true"
+
+      # --- Router: HTTPS/websecure -------------------------------------------
+      - "traefik.http.routers.fileee-server.rule=Host(`fileee-api.strausmann.cloud`)"
+      - "traefik.http.routers.fileee-server.entrypoints=websecure"
+      - "traefik.http.routers.fileee-server.tls=true"
+      - "traefik.http.routers.fileee-server.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.fileee-server.service=fileee-server"
+
+      # --- Service: Ziel-Port -------------------------------------------------
+      - "traefik.http.services.fileee-server.loadbalancer.server.port=8080"
+      - "traefik.http.services.fileee-server.loadbalancer.healthcheck.path=/healthz"
+      - "traefik.http.services.fileee-server.loadbalancer.healthcheck.interval=30s"
+
+      # --- Optionale zweite Kante: Basic-Auth NUR als zusätzlicher Perimeter-
+      # Schutz (z. B. wenn zusätzlich /docs abgesichert werden soll). Der
+      # eigentliche API-Zugriff bleibt über FILEEE_API_TOKEN (Bearer) gesichert.
+      # Htpasswd-Fragment mit `htpasswd -nbB claude-automation CHANGE_ME`
+      # erzeugen — NIE das echte Fragment committen.
+      # - "traefik.http.middlewares.fileee-server-auth.basicauth.users=claude-automation:CHANGE_ME_HTPASSWD_HASH"
+      # - "traefik.http.routers.fileee-server.middlewares=fileee-server-auth"
+
+networks:
+  traefik-public:
+    external: true
+
+volumes:
+  fileee-server-session:

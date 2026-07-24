@@ -1,0 +1,116 @@
+# Referenz-Template — echtes GitOps folgt in infrastructure/docker/fileee-server.
+#
+# fileee-server ÖFFENTLICH über Pangolin, aber OHNE SSO: das hier ist ein
+# reiner Maschinen-API-Endpunkt (N8N/CI), keine Browser-UI — SSO würde jeden
+# Machine-Client zwingen, sich durch einen interaktiven Login-Flow zu klicken,
+# was für einen Automations-API falsch ist. Das Gate bleibt der statische
+# FILEEE_API_TOKEN (Bearer-Auth im Server selbst). Siehe
+# .claude/rules/pangolin-resource-standard.md (homelab-management-Repo) für den
+# vollständigen Blueprint-Label-Standard — diese Datei weicht davon BEWUSST in
+# genau einem Punkt ab: `auth.sso-enabled` wird NICHT gesetzt.
+#
+# ACHTUNG Secrets: "CHANGE_ME"-Platzhalter vor dem Start ersetzen — insbesondere
+# das Header-Auth-Passwort NICHT im Klartext committen (siehe Kommentar unten).
+#
+# ACHTUNG Ziel-Netz: Welches Docker-Netz Pangolin/Newt tatsächlich für Targets
+# nutzt, ist NODE-ABHÄNGIG. Vor dem ersten Deploy per
+#   docker inspect pangolin-newt --format '{{json .NetworkSettings.Networks}}'
+# verifizieren und ggf. `networks:` unten anpassen — NICHT raten. Pangolin-
+# Blueprints sind zudem ATOMAR PRO NODE: Labels auf einem Container wirken nur,
+# wenn der Compose-Stack auf demselben Node läuft wie der Newt-Agent, der die
+# Blueprint-Sync-Labels ausliest.
+#
+# ACHTUNG Rootless-Volume: siehe compose.plain.yaml — FILEEE_SESSION_PATH muss
+# von uid 65532 beschreibbar sein.
+
+services:
+  fileee-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # image: git.strausmann.de/infrastructure/docker/fileee-server:latest  # GitOps-Alternative zu `build`
+    container_name: fileee-server
+    restart: unless-stopped
+
+    environment:
+      FILEEE_USERNAME: "CHANGE_ME"
+      FILEEE_PASSWORD: "CHANGE_ME"
+      FILEEE_TOTP_SEED: ""
+      FILEEE_API_TOKEN: "CHANGE_ME"
+      FILEEE_ALLOW_DESTRUCTIVE: "false"
+      FILEEE_LISTEN_ADDR: ":8080"
+      FILEEE_SESSION_PATH: "/home/nonroot/session.json"
+      FILEEE_KEEPALIVE_INTERVAL: "15m"
+      FILEEE_WAIT_TIMEOUT: "60s"
+      FILEEE_WAIT_MAX: "300s"
+      FILEEE_RATE_RPS: "1"
+      FILEEE_RATE_BURST: "3"
+      FILEEE_TRUSTED_PROXIES: "" # bei Pangolin i. d. R. leer lassen (Pangolin selbst terminiert TLS/Proxy)
+      FILEEE_CLIENT_IP_HEADERS: "CF-Connecting-IP,X-Real-IP,X-Forwarded-For"
+      FILEEE_DOCS_PUBLIC: "true"
+      FILEEE_MAX_UPLOAD_SIZE: "33554432"
+      FILEEE_WEBHOOK_URL: ""
+      FILEEE_WEBHOOK_SECRET: ""
+      FILEEE_WATCH_INTERVAL: "0"
+      FILEEE_USER_AGENT: ""
+      FILEEE_LOG_LEVEL: "info"
+      SECRET_BACKEND: "env"
+      # Infisical-Alternative: siehe compose.plain.yaml (identisches Muster).
+
+    volumes:
+      - fileee-server-session:/home/nonroot
+      - /etc/localtime:/etc/localtime:ro
+
+    healthcheck:
+      test: ["CMD", "/fileee-server", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # Kein "ports:" — Pangolin/Newt spricht den Container über das gemeinsame
+    # Docker-Netz an (siehe Kommentar oben zu `docker inspect pangolin-newt`).
+    networks:
+      - pangolin-network
+
+    labels:
+      # --- Identität & Routing ---------------------------------------------
+      - "pangolin.public-resources.fileee-server.name=fileee-server API"
+      - "pangolin.public-resources.fileee-server.full-domain=fileee-api.strausmann.cloud"
+      - "pangolin.public-resources.fileee-server.protocol=http"
+      - "pangolin.public-resources.fileee-server.ssl=true"
+      - "pangolin.public-resources.fileee-server.targets[0].method=http"
+      - "pangolin.public-resources.fileee-server.targets[0].port=8080"
+      - "pangolin.public-resources.fileee-server.targets[0].path-match=prefix"
+
+      # --- Healthcheck (hostname ist Pflichtfeld) --------------------------
+      - "pangolin.public-resources.fileee-server.targets[0].healthcheck.enabled=true"
+      - "pangolin.public-resources.fileee-server.targets[0].healthcheck.hostname=fileee-server"
+      - "pangolin.public-resources.fileee-server.targets[0].healthcheck.path=/healthz"
+      - "pangolin.public-resources.fileee-server.targets[0].healthcheck.port=8080"
+      - "pangolin.public-resources.fileee-server.targets[0].healthcheck.interval=30"
+
+      # --- Auth: BEWUSST OHNE SSO (reiner Maschinen-API-Endpunkt, kein UI) --
+      # KEIN "pangolin.public-resources.fileee-server.auth.sso-enabled" Label
+      # setzen — SSO wäre hier falsch, siehe Kopfkommentar dieser Datei.
+      #
+      # Optionale zweite Kante: Basic-Auth NUR über /docs (OpenAPI-UI), damit
+      # die Doku nicht komplett offen im Netz hängt. Der eigentliche API-Zugriff
+      # bleibt weiterhin ausschließlich über FILEEE_API_TOKEN (Bearer) gesichert
+      # — Basic-Auth hier ist ein zusätzlicher Perimeter-Schutz, kein Ersatz.
+      # - "pangolin.public-resources.fileee-server.auth.basic-auth.user=claude-automation"
+      # - "pangolin.public-resources.fileee-server.auth.basic-auth.password=CHANGE_ME_64_HEX_CHARS"
+      # - "pangolin.public-resources.fileee-server.auth.basic-auth.extended-compatibility=false"
+      # Secret-Generierung: `openssl rand -hex 32`. Passwort NIE im Klartext
+      # committen — siehe .claude/rules/pangolin-resource-standard.md Abschnitt
+      # "Anti-Patterns" zu hartcodierten Passwörtern in Blueprint-Labels.
+
+networks:
+  pangolin-network:
+    external: true
+    # Tatsächlichen Netz-Namen per `docker inspect pangolin-newt` verifizieren
+    # (Node-abhängig) und hier eintragen, z. B. "traefik-public" oder ein
+    # dediziertes Pangolin-Netz.
+
+volumes:
+  fileee-server-session:
