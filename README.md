@@ -10,6 +10,25 @@ Eine **inoffizielle** Go-Client-Library für das **interne** Web-App-API von [Fi
 
 > **Status:** In Entwicklung — privat. Noch keine stabile Version, kein `v0`-Tag, API kann sich jederzeit ändern.
 
+## Über Fileee
+
+[Fileee](https://www.fileee.com) ist ein Dokumentenmanagement-Dienst der fileee GmbH (Deutschland),
+der Papierkram digitalisiert und automatisch ordnet. Belege werden per App gescannt oder importiert;
+eine Texterkennung (OCR) erkennt Dokumenttyp, Absender, Datum und Fristen automatisch, sodass sich
+alles per Volltext durchsuchen lässt. Dazu kommen Fristen-Erinnerungen, Teilen über „fileee Spaces"
+(inkl. Bearbeitungsschutz) sowie Export- und Direkt-Integrationen (u. a. DATEV, lexoffice, SevDesk).
+
+Datenschutz ist ein Kernversprechen: **Hosting in Deutschland, DSGVO-konform**, Dokumente werden
+**individuell verschlüsselt** gespeichert, Zwei-Faktor-Authentifizierung ist verfügbar.
+
+Ergänzt wird der Dienst durch die **fileeeBox** — eine physische Ablagebox mit individuellem
+Barcode: Dokumente werden gescannt und einfach oben in die Box gelegt; die App merkt sich Box und
+Position. Über die Box eingescannte Seiten (bis zu 600) belasten das monatliche Upload-Kontingent
+nicht. Als günstige Selbstbau-Variante gibt es **fileeeDIY** (Druckvorlagen für Schuhkarton/Ordner).
+
+*Diese Library ist ein inoffizielles, unabhängiges Community-Projekt und steht in keiner Verbindung
+zur fileee GmbH.*
+
 ## Installation
 
 ```bash
