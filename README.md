@@ -66,6 +66,44 @@ Keyring) laden. Weitere Konfiguration über die `With…`-Optionen von `New` (Ra
 `*http.Client`, Session-Store, User-Agent). Vollständige Referenz aller Typen und Methoden:
 [pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee) bzw. `go doc ./fileee`.
 
+## Funktionsumfang
+
+Was die Library aktuell abdeckt und was (noch) nicht. Das Fileee-API ist reverse-engineered; nicht
+abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch nicht implementiert.
+
+**Abgedeckt**
+
+| Bereich | Methoden |
+|---|---|
+| Auth/Session | `Login`, `Logout` (serverseitiger Widerruf + Jar-Clear), `EnsureSession`, automatische Re-Auth, TOTP-2FA, `AccountStatus` |
+| Dokumente | `Documents.Query` / `Diff` / `Get` / `Update` / `Upload`, `Search` (Volltext), `DownloadPDF`, `DownloadPageImage` |
+| Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt) |
+| FileeeBoxen | `Boxes.List` / `Get` / `AddDocument` / `RemoveDocument` |
+| Erinnerungen | `Reminders.Query` / `Diff` / `Get` / `Create` |
+| Kontakte | `Contacts.Query` / `Diff` / `Get` / `Create` / `Update` |
+| Stammdaten (read) | `Tags`, `Companies`, `DocumentTypes` (`Query` / `Diff` / `Get`) |
+| Betrieb | Rate-Limiting, Backoff, Session-Persistenz, konfigurierbarer User-Agent |
+
+**Nicht abgedeckt (bewusst ausgelassen)**
+
+| Funktion | Grund |
+|---|---|
+| `revision-lock` (Aufbewahrungssperre) | Kann ein Dokument serverseitig unbrauchbar machen (bei Tests beobachtet) — zu riskant für einen Client, bis das Verhalten geklärt ist |
+| Hartes Löschen von Dokumenten/Kontakten | Destruktiv; nicht Teil des aktuellen Scopes |
+
+**Noch nicht implementiert (geplant/denkbar)**
+
+| Funktion | API |
+|---|---|
+| Teilen (anonymer Link, an Kontakt) | `documents/rest/share`, Konversationen |
+| Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
+| Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
+| Seiten-Operationen | Merge/Split/Rotate/Extract/Reorder |
+| Tags anlegen/zuweisen, OCR-Text, Live-Push (SSE) | diverse |
+
+> Details zu den Endpunkten: [`docs/API.md`](docs/API.md). Die vollständige Methoden-Referenz steht auf
+> [pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee).
+
 ## Warum
 
 `go-fileee` ist ein **neutraler, allgemeiner** Go-Client für das Fileee-API: er kapselt Login (inkl. TOTP-2FA), Dokument-Sync, Download und Upload programmatisch — ohne Bindung an ein bestimmtes Ziel- oder Fremdsystem. Damit lässt sich Fileee für viele Zwecke automatisieren:

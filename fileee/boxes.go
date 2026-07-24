@@ -13,8 +13,10 @@ type BoxDocument struct {
 	Modified   string `json:"modified"`
 }
 
-// FileeeBox ist eine physische Ablagebox (mit QR-Code), deren Dokument-Zuordnung digital verwaltet
-// wird. BoxNr ist die Nummer, die beim Mail-Upload im Betreff als "@box<N>" referenziert wird.
+// FileeeBox ist eine per QR-Code identifizierte Ablagebox, deren Dokument-Zuordnung digital
+// verwaltet wird — entweder das physische fileeeBox-Produkt oder eine selbstgebaute fileeeDIY-Box
+// (ProductCode unterscheidet die Variante). BoxNr ist die Nummer, die beim Mail-Upload im Betreff
+// als "@box<N>" referenziert wird.
 type FileeeBox struct {
 	ID               string        `json:"id"`
 	BoxNr            int           `json:"boxNr"`
