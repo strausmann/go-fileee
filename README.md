@@ -102,6 +102,8 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 | Teilen | `Documents.Share` (Freigabe-Link) / `Unshare` |
 | Share-Link nutzen (anonym) | `NewShareClient` → `Resolve(token)` (typisierte `SharedDocument` mit `PageIDs`), `DownloadPageImage` (Seitenbild), `DownloadSharedPage` (Seiten-OCR), `DownloadSharedPDF` (Voll-PDF vom Static-Host) — ohne Login, für N8N-Webhook-Flows; `ShareTokenFromLink` |
 | Dokumenttyp-Felder | `DocumentTypeSchemes` (`Query`/`Diff`/`Get`, `Fields()` je Typ) |
+| OCR-Daten | `Documents.PageOCR` (eigenes Login) / `ShareClient.SharedPageOCR` (anonym) → `[]OCRToken` (Text + Bounding-Box) — für Migrationen (z. B. Paperless-ngx) |
+| Link-Erkennung | `ParseDocumentLink` erkennt intern (`…/documents/:id`) vs. anonym (`…/shared/:token`) |
 | Fehler-Erkennung | `errors.Is(err, ErrRateLimited \| ErrUnsupportedFileType \| ErrNotFound \| ErrDuplicateDocument)`, `BlockedError` (secondsBlocked) |
 | FileeeBoxen | `Boxes.List` / `Get` / `AddDocument` / `RemoveDocument` |
 | Erinnerungen | `Reminders.Query` / `Diff` / `Get` / `Create` |
@@ -120,8 +122,8 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 
 | Funktion | API |
 |---|---|
-| Teilen an einen Kontakt (Konversation) | Konversationen (`documents/rest/share` = Link-Freigabe ist abgedeckt) |
-| Getippte OCR-Verarbeitung (`[]OCRToken`) + authentifizierter `/api/pages/:id` (eigenes Login) | OCR-Rohdaten via `DownloadSharedPage` abgedeckt; getippte Struktur + authentifizierte Variante geplant |
+| Teilen an einen Kontakt + Dokument-Chat (Konversation) | Endpunkte gemappt, noch nicht in der Lib: `POST /api/conversations/rest/diff` (Liste), `PUT /api/conversations/rest/:id` (anlegen), `.../participants/add\|remove`, `.../rest/:id/message` (Chat), `conversations/invitations/:id/accept` (Annahme) |
+| Aktive Shares eines Dokuments auflisten | benötigt „Teilen"-Panel-HAR (Link-Freigaben + Konversationen pro Dokument) |
 | „Alle Dateien" ZIP-Datei abholen | Export-Start + Warten bis fertig (`WaitForProcess`) abgedeckt; der finale ZIP-**Byte-Download** noch offen — der Feldname der Download-URL im fertigen `DownloadAllProcess` ist noch nicht verifiziert (finaler Prozess-Snapshot fehlt), wird daher bewusst nicht geraten |
 | Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
 | Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
