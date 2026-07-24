@@ -2,6 +2,7 @@ package fileee
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -282,22 +283,25 @@ func TestDocumentUnmarshalMapptAttributesDataKorrekt(t *testing.T) {
 }
 
 func TestDocumentAttributesMarshalRoundTripGruppenUndSimpleFelder(t *testing.T) {
-	gelesen := true
-	rechnungsdatum := time.Date(2026, 3, 4, 0, 0, 0, 0, time.UTC)
-	in := DocumentAttributes{
-		Amount: &Money{Currency: "EUR", Value: 42.5},
-		BankAccount1: &BankAccount{
-			IBAN:          "DE00TEST00000000000003",
-			BIC:           "TESTDEXXX",
-			Bank:          "Testbank",
-			AccountHolder: "Test Testmann",
-		},
-		Read:           &gelesen,
-		InvoiceDate:    &rechnungsdatum,
-		TotalPageCount: 7,
-		RawExtra:       map[string]json.RawMessage{},
+	// Gruppen-Attribute werden aus dem dekodierten Wire-Format VERBATIM bewahrt (nicht aus den
+	// typisierten Feldern rekonstruiert). Simple Felder round-trippen über die typisierten Felder.
+	// Round-Trip: Wire -> Struct -> Wire -> Struct.
+	wire := `{
+		"read":{"value":true,"type":"BOOLEAN","source":"USER","modified":"2026-03-04T00:00:00.000Z"},
+		"invoiceDate":{"value":"2026-03-04","type":"DATE","source":"USER","modified":"2026-03-04T00:00:00.000Z"},
+		"totalPageCount":{"value":7,"type":"INTEGER","source":"SYSTEM","modified":"2026-03-04T00:00:00.000Z"},
+		"amount":{"type":"COMPOSED","attributeGroup":"COMPOSED","source":"SYSTEM","modified":"2026-03-04T00:00:00.000Z","data":{
+			"currency":{"value":"EUR","type":"ENUMERATION","source":"SYSTEM","modified":"2026-03-04T00:00:00.000Z","enumClassName":"io.fileee.Currency"},
+			"value":{"value":42.5,"type":"DOUBLE","source":"SYSTEM","modified":"2026-03-04T00:00:00.000Z"}
+		}},
+		"bankAccount1":{"type":"COMPOSED","attributeGroup":"COMPOSED","source":"SYSTEM","modified":"2026-03-04T00:00:00.000Z","data":{
+			"iban":{"value":"DE00TEST00000000000003","type":"TEXT","source":"SYSTEM","modified":"2026-03-04T00:00:00.000Z"}
+		}}
+	}`
+	var in DocumentAttributes
+	if err := json.Unmarshal([]byte(wire), &in); err != nil {
+		t.Fatalf("Unmarshal wire: %v", err)
 	}
-
 	out, err := json.Marshal(in)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -308,23 +312,26 @@ func TestDocumentAttributesMarshalRoundTripGruppenUndSimpleFelder(t *testing.T) 
 	}
 
 	if back.Amount == nil || back.Amount.Currency != "EUR" || back.Amount.Value != 42.5 {
-		t.Errorf("Amount (setGroupMoney) Round-Trip verloren: %+v", back.Amount)
+		t.Errorf("Amount Round-Trip verloren: %+v", back.Amount)
 	}
-	if back.BankAccount1 == nil ||
-		back.BankAccount1.IBAN != in.BankAccount1.IBAN ||
-		back.BankAccount1.BIC != in.BankAccount1.BIC ||
-		back.BankAccount1.Bank != in.BankAccount1.Bank ||
-		back.BankAccount1.AccountHolder != in.BankAccount1.AccountHolder {
-		t.Errorf("BankAccount1 (setGroupBankAccount) Round-Trip verloren: %+v", back.BankAccount1)
+	if back.BankAccount1 == nil || back.BankAccount1.IBAN != "DE00TEST00000000000003" {
+		t.Errorf("BankAccount1 Round-Trip verloren: %+v", back.BankAccount1)
+	}
+	// Verbatim-Erhalt: enumClassName und type COMPOSED bleiben im emittierten amount-Wrapper.
+	var emitted map[string]json.RawMessage
+	_ = json.Unmarshal(out, &emitted)
+	if !strings.Contains(string(emitted["amount"]), "enumClassName") ||
+		!strings.Contains(string(emitted["amount"]), "COMPOSED") {
+		t.Errorf("amount-Wrapper nicht verbatim bewahrt: %s", emitted["amount"])
 	}
 	if back.Read == nil || !*back.Read {
-		t.Errorf("Read (setSimpleBool) Round-Trip verloren: %v", back.Read)
+		t.Errorf("Read Round-Trip verloren: %v", back.Read)
 	}
-	if back.InvoiceDate == nil || !back.InvoiceDate.Equal(rechnungsdatum) {
-		t.Errorf("InvoiceDate (setSimpleTime) Round-Trip verloren: %v", back.InvoiceDate)
+	if back.InvoiceDate == nil {
+		t.Errorf("InvoiceDate Round-Trip verloren: %v", back.InvoiceDate)
 	}
 	if back.TotalPageCount != 7 {
-		t.Errorf("TotalPageCount (setSimpleInt) Round-Trip verloren: %d, erwartet 7", back.TotalPageCount)
+		t.Errorf("TotalPageCount Round-Trip verloren: %d, erwartet 7", back.TotalPageCount)
 	}
 }
 

@@ -109,6 +109,7 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 		jar:       jar,
 		baseURL:   cfg.baseURL,
 		userAgent: composeUserAgent(cfg.userAgent),
+		logger:    cfg.logger,
 	}
 
 	// Die Lib baut ihren EIGENEN *http.Client statt den vom Aufrufer übergebenen zu mutieren — ein

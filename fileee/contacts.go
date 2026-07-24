@@ -28,7 +28,7 @@ func newContactService(c *Client) WriteService[Contact] {
 type contactCreateWire struct {
 	ID                   string        `json:"id"`
 	CompanyID            string        `json:"companyId,omitempty"`
-	CompanyName          string        `json:"companyName,omitempty"`
+	CompanyName          string        `json:"companyName"`
 	FirstName            string        `json:"firstName,omitempty"`
 	LastName             string        `json:"lastName,omitempty"`
 	Email                string        `json:"email,omitempty"`

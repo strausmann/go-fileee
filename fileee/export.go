@@ -21,7 +21,7 @@ type Process struct {
 	ID             string            `json:"id"`
 	Status         string            `json:"status"`
 	Type           string            `json:"type,omitempty"`
-	Documents      []string          `json:"documents,omitempty"`
+	Documents      []json.RawMessage `json:"documents,omitempty"`
 	DocumentErrors []json.RawMessage `json:"documentErrors,omitempty"`
 	Retryable      bool              `json:"retryable,omitempty"`
 	Dismissed      bool              `json:"dismissed,omitempty"`

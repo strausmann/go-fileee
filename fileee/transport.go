@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
@@ -34,6 +35,9 @@ type rateLimitedTransport struct {
 	// userAgent wird bei jedem Request gesetzt (siehe setUserAgent), damit die Fileee-Server-Logs
 	// Client-Name + Version sehen statt des generischen "Go-http-client/1.1".
 	userAgent string
+
+	// logger emittiert secret-safe Debug-Events (Methode, Pfad, Status, Retry/Reauth) zum Debuggen.
+	logger *slog.Logger
 
 	reauthMu sync.Mutex
 	reauth   reauthFunc
@@ -166,6 +170,12 @@ func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 			t.sleepFn()(t.backoff.NextDelay(attempt))
 			attempt++
 			continue
+		}
+
+		if t.logger != nil {
+			t.logger.Debug("fileee request",
+				"method", cloned.Method, "path", cloned.URL.Path,
+				"status", resp.StatusCode, "attempt", attempt)
 		}
 
 		if resp.StatusCode == http.StatusForbidden && !reauthed && t.reauth != nil && !isReauthSkipped(req.Context()) {

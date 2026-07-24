@@ -459,14 +459,21 @@ func (d *DocumentAttributes) UnmarshalJSON(data []byte) error {
 			d.TotalPageCount = decodeIntValue(wrapper.Value)
 		case "maxPageNr":
 			d.MaxPageNr = decodeIntValue(wrapper.Value)
+		// Gruppen-Attribute typisiert für Lesezugriff dekodieren UND das rohe Wrapper-JSON in
+		// RawExtra bewahren: Der verschachtelte Wrapper (mit enumClassName, per-Feld source/modified)
+		// lässt sich nicht verlustfrei rekonstruieren, daher wird er beim Update verbatim zurückgesendet.
 		case "amount":
 			d.Amount = decodeMoneyGroup(wrapper.Data)
+			d.RawExtra[key] = val
 		case "grossIncome":
 			d.GrossIncome = decodeMoneyGroup(wrapper.Data)
+			d.RawExtra[key] = val
 		case "netIncome":
 			d.NetIncome = decodeMoneyGroup(wrapper.Data)
+			d.RawExtra[key] = val
 		case "bankAccount1":
 			d.BankAccount1 = decodeBankAccountGroup(wrapper.Data)
+			d.RawExtra[key] = val
 		default:
 			d.RawExtra[key] = val
 		}
@@ -540,34 +547,6 @@ func setListStrings(out map[string]json.RawMessage, key string, value []string) 
 	}
 }
 
-func setGroupMoney(out map[string]json.RawMessage, key string, value *Money) {
-	if value == nil {
-		return
-	}
-	b, err := json.Marshal(struct {
-		AttributeGroup string         `json:"attributeGroup"`
-		Data           map[string]any `json:"data"`
-		Type           string         `json:"type"`
-	}{key, map[string]any{"currency": value.Currency, "value": value.Value}, "AttributeGroup"})
-	if err == nil {
-		out[key] = b
-	}
-}
-
-func setGroupBankAccount(out map[string]json.RawMessage, key string, value *BankAccount) {
-	if value == nil {
-		return
-	}
-	b, err := json.Marshal(struct {
-		AttributeGroup string         `json:"attributeGroup"`
-		Data           map[string]any `json:"data"`
-		Type           string         `json:"type"`
-	}{key, map[string]any{"iban": value.IBAN, "bic": value.BIC, "bank": value.Bank, "account_holder": value.AccountHolder}, "AttributeGroup"})
-	if err == nil {
-		out[key] = b
-	}
-}
-
 func (d DocumentAttributes) MarshalJSON() ([]byte, error) {
 	out := map[string]json.RawMessage{}
 	for k, v := range d.RawExtra {
@@ -591,10 +570,9 @@ func (d DocumentAttributes) MarshalJSON() ([]byte, error) {
 	setSimpleBool(out, "payed", d.Payed)
 	setSimpleInt(out, "totalPageCount", d.TotalPageCount)
 	setSimpleInt(out, "maxPageNr", d.MaxPageNr)
-	setGroupMoney(out, "amount", d.Amount)
-	setGroupMoney(out, "grossIncome", d.GrossIncome)
-	setGroupMoney(out, "netIncome", d.NetIncome)
-	setGroupBankAccount(out, "bankAccount1", d.BankAccount1)
+	// Gruppen-Attribute (amount/grossIncome/netIncome/bankAccount1) werden verbatim aus RawExtra
+	// emittiert (siehe UnmarshalJSON) — kein verlustbehaftetes Rekonstruieren aus den typisierten
+	// Feldern.
 	return json.Marshal(out)
 }
 

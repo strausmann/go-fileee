@@ -101,11 +101,19 @@ func (s *restService[T]) queryIDs(ctx context.Context, opts QueryOptions) (*idQu
 	}
 	ids := make([]string, 0, len(wire.Rows))
 	for _, raw := range wire.Rows {
+		// onlyIds liefert je nach Ressource entweder einen ID-String oder ein {id, version}-Objekt.
 		var id string
-		if err := json.Unmarshal(raw, &id); err != nil {
+		if err := json.Unmarshal(raw, &id); err == nil {
+			ids = append(ids, id)
+			continue
+		}
+		var obj struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil {
 			return nil, fmt.Errorf("fileee: queryIDs row decode: %w", err)
 		}
-		ids = append(ids, id)
+		ids = append(ids, obj.ID)
 	}
 	return &idQueryResult{IDs: ids, TotalRows: wire.TotalRows}, nil
 }
