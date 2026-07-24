@@ -280,20 +280,22 @@ func TestConversations_PendingInvitations(t *testing.T) {
 }
 
 func TestConversations_AcceptInvitation(t *testing.T) {
-	var hit bool
+	var captured map[string]any
 	srv := newMockServer(t, convAuthMock(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/conversations/invitations/c1/accept" && r.Method == http.MethodPost {
-			hit = true
-			w.Write([]byte(`{}`))
+		if r.URL.Path == "/api/conversations/invitations/tok-42/accept" && r.Method == http.MethodPost {
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			_ = json.Unmarshal(b, &captured)
+			w.Write([]byte(`{"id":"c1"}`))
 			return
 		}
 		w.WriteHeader(404)
 	}))
 	c := convTestClient(t, srv)
-	if err := c.Conversations.AcceptInvitation(context.Background(), "c1"); err != nil {
+	if err := c.Conversations.AcceptInvitation(context.Background(), "tok-42"); err != nil {
 		t.Fatalf("AcceptInvitation: %v", err)
 	}
-	if !hit {
-		t.Error("accept-Endpunkt wurde nicht aufgerufen")
+	if captured["token"] != "tok-42" || captured["acceptToS"] != false {
+		t.Errorf("Accept-Body falsch: %+v", captured)
 	}
 }

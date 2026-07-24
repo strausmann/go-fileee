@@ -440,13 +440,25 @@ func (s *conversationService) PendingInvitations(ctx context.Context) ([]Convers
 	return out, nil
 }
 
-// AcceptInvitation nimmt die Einladung zu einer Konversation an
-// (POST /api/conversations/invitations/:id/accept).
-func (s *conversationService) AcceptInvitation(ctx context.Context, conversationID string) error {
+// acceptInvitationWire ist der (live belegte) Body von …/invitations/:token/accept — der Token
+// steht zusätzlich im Body, acceptToS bestätigt ggf. die Nutzungsbedingungen (invitationIsToS).
+type acceptInvitationWire struct {
+	Token     string `json:"token"`
+	AcceptToS bool   `json:"acceptToS"`
+}
+
+// AcceptInvitation nimmt eine Einladung über ihren Invitation-Token an
+// (POST /api/conversations/invitations/:token/accept). Der Token stammt aus dem Einladungslink/der
+// Einladungs-E-Mail (NICHT die Conversation-ID). Live-belegtes Body-Format.
+func (s *conversationService) AcceptInvitation(ctx context.Context, invitationToken string) error {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return err
 	}
-	resp, err := s.client.postJSON(ctx, "/api/conversations/invitations/"+conversationID+"/accept", []byte("{}"))
+	body, err := json.Marshal(acceptInvitationWire{Token: invitationToken, AcceptToS: false})
+	if err != nil {
+		return fmt.Errorf("fileee: accept invitation encode: %w", err)
+	}
+	resp, err := s.client.postJSON(ctx, "/api/conversations/invitations/"+invitationToken+"/accept", body)
 	if err != nil {
 		return err
 	}
