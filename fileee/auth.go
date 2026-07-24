@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pquerna/otp/totp"
@@ -63,6 +64,42 @@ type authClient struct {
 	baseURL string
 	creds   Credentials
 	store   SessionStore
+	// Freshness-Fenster (Umbrella-Spec §4.5-Erweiterung): nach einem erfolgreichen Verify/Login
+	// gilt die Session bis verifiedUntil als bestätigt; EnsureSession überspringt den user-session-
+	// Round-Trip, solange das Fenster gilt. freshness<=0 deaktiviert das (Verhalten wie bisher:
+	// jeder Aufruf verifiziert). now ist injizierbar für Tests (Default time.Now).
+	freshMu       sync.Mutex
+	verifiedUntil time.Time
+	freshness     time.Duration
+	now           func() time.Time
+}
+
+// nowFn liefert die (ggf. injizierte) Uhr.
+func (a *authClient) nowFn() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
+// isFresh meldet, ob die Session aktuell als bestätigt gilt (innerhalb des Freshness-Fensters).
+func (a *authClient) isFresh() bool {
+	if a.freshness <= 0 {
+		return false
+	}
+	a.freshMu.Lock()
+	defer a.freshMu.Unlock()
+	return a.nowFn().Before(a.verifiedUntil)
+}
+
+// markFresh verlängert das Freshness-Fenster nach einem erfolgreichen Verify/Login.
+func (a *authClient) markFresh() {
+	if a.freshness <= 0 {
+		return
+	}
+	a.freshMu.Lock()
+	a.verifiedUntil = a.nowFn().Add(a.freshness)
+	a.freshMu.Unlock()
 }
 
 type existentRequestWire struct {
@@ -242,6 +279,15 @@ func (a *authClient) userSession(ctx context.Context) (*userSessionWire, error) 
 // 1. gespeicherte Session laden, 2. per user-session prüfen, 3. bei ungültig/fehlend
 // reauthentifizieren.
 func (a *authClient) EnsureSession(ctx context.Context) error {
+	return a.ensureSession(ctx, false)
+}
+
+// ensureSession implementiert EnsureSession mit optionalem Freshness-Bypass. force=true (Keepalive/
+// RefreshSession) ignoriert das Freshness-Fenster und verifiziert immer.
+func (a *authClient) ensureSession(ctx context.Context, force bool) error {
+	if !force && a.isFresh() {
+		return nil
+	}
 	sess, err := a.store.Load(ctx)
 	if err != nil {
 		return fmt.Errorf("fileee: session store load: %w", err)
@@ -252,10 +298,15 @@ func (a *authClient) EnsureSession(ctx context.Context) error {
 			if us.SecondsBlocked > 0 {
 				return &BlockedError{SecondsBlocked: int(us.SecondsBlocked)}
 			}
+			a.markFresh()
 			return nil
 		}
 	}
-	return a.reauthenticate(ctx)
+	if err := a.reauthenticate(ctx); err != nil {
+		return err
+	}
+	a.markFresh()
+	return nil
 }
 
 // tokenLogin ist der bevorzugte headless-Re-Auth-Pfad über das rememberMe-JWT-Cookie

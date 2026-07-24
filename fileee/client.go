@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
+	"time"
 )
 
 const defaultBaseURL = "https://my.fileee.com"
@@ -26,6 +27,7 @@ type clientConfig struct {
 	backoff       BackoffPolicy
 	logger        *slog.Logger
 	userAgent     string
+	freshness     time.Duration
 }
 
 // Option konfiguriert einen Client bei New.
@@ -41,6 +43,14 @@ func WithBaseURL(url string) Option { return func(c *clientConfig) { c.baseURL =
 // WithStaticBaseURL überschreibt den Static-Host (Default: https://static.fileee.com), über den der
 // ShareClient geteilte Voll-PDFs lädt. Nur für den ShareClient relevant, v. a. für Tests.
 func WithStaticBaseURL(url string) Option { return func(c *clientConfig) { c.staticBaseURL = url } }
+
+// WithSessionFreshness aktiviert das Session-Freshness-Fenster: nach einem erfolgreichen Verify/
+// Login überspringt EnsureSession den user-session-Round-Trip, solange d nicht abgelaufen ist
+// (Default 0 = aus, jeder Aufruf verifiziert). Für langlaufende Consumer (fileee-server) sinnvoll,
+// zusammen mit StartKeepAlive.
+func WithSessionFreshness(d time.Duration) Option {
+	return func(c *clientConfig) { c.freshness = d }
+}
 
 // WithSessionStore setzt den Persistenz-Store für den Session-Cookie-Jar (Default: Datei im
 // Nutzerprofil).
@@ -139,7 +149,7 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 		store = NewFileSessionStore(defaultSessionPath())
 	}
 
-	auth := &authClient{hc: hc, baseURL: cfg.baseURL, creds: creds, store: store}
+	auth := &authClient{hc: hc, baseURL: cfg.baseURL, creds: creds, store: store, freshness: cfg.freshness}
 	transport.reauth = auth.reauthenticate
 
 	c := &Client{
