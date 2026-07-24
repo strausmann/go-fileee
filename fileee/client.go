@@ -20,6 +20,7 @@ type clientConfig struct {
 	burst        int
 	backoff      BackoffPolicy
 	logger       *slog.Logger
+	userAgent    string
 }
 
 type Option func(*clientConfig)
@@ -32,6 +33,10 @@ func WithRateLimit(rps float64, burst int) Option {
 }
 func WithBackoff(policy BackoffPolicy) Option { return func(c *clientConfig) { c.backoff = policy } }
 func WithLogger(l *slog.Logger) Option        { return func(c *clientConfig) { c.logger = l } }
+
+// WithUserAgent setzt einen Konsumenten-User-Agent (z. B. "paperless-scan-bridge/2.0"). Die
+// Lib-Kennung "go-fileee/<version>" wird IMMER angehängt — Fileee sieht Konsument UND Lib.
+func WithUserAgent(ua string) Option { return func(c *clientConfig) { c.userAgent = ua } }
 
 // Client ist der Einstiegspunkt der Lib (Umbrella-Spec §3.1). Zustandslos bis auf die
 // SessionStore-Referenz (ADR-0001).
@@ -81,11 +86,12 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	}
 
 	transport := &rateLimitedTransport{
-		base:    base,
-		limiter: newLimiter(cfg.rps, cfg.burst),
-		backoff: cfg.backoff,
-		jar:     jar,
-		baseURL: cfg.baseURL,
+		base:      base,
+		limiter:   newLimiter(cfg.rps, cfg.burst),
+		backoff:   cfg.backoff,
+		jar:       jar,
+		baseURL:   cfg.baseURL,
+		userAgent: composeUserAgent(cfg.userAgent),
 	}
 
 	// Die Lib baut ihren EIGENEN *http.Client statt den vom Aufrufer übergebenen zu mutieren — ein

@@ -31,6 +31,10 @@ type rateLimitedTransport struct {
 	// RoundTrip-Iteration unconditional gehalten würde, deadlockt sich dadurch selbst (derselbe
 	// Goroutine-Stack kommt während des Reauth erneut hier an; sync.Mutex ist nicht reentrant).
 	// Deshalb ist der Snapshot unten lock-frei über atomic.Uint64 gelöst.
+	// userAgent wird bei jedem Request gesetzt (siehe setUserAgent), damit die Fileee-Server-Logs
+	// Client-Name + Version sehen statt des generischen "Go-http-client/1.1".
+	userAgent string
+
 	reauthMu sync.Mutex
 	reauth   reauthFunc
 	// reauthEpoch wird bei jedem ERFOLGREICH abgeschlossenen Reauth erhöht (atomar — der reine
@@ -107,6 +111,15 @@ func (t *rateLimitedTransport) injectXSRF(req *http.Request) {
 	}
 }
 
+// setUserAgent setzt den Lib-User-Agent auf dem Request. Überschreibt den Go-Default; ein
+// bewusst gesetzter Konsumenten-User-Agent kommt über WithUserAgent/composeUserAgent hier bereits
+// vorkombiniert an.
+func (t *rateLimitedTransport) setUserAgent(req *http.Request) {
+	if t.userAgent != "" {
+		req.Header.Set("User-Agent", t.userAgent)
+	}
+}
+
 // RoundTrip implementiert Rate-Limit, XSRF-Injektion, 403-getriebenen Re-Auth (genau 1 Retry,
 // mutex-geschützt + stampede-sicher über reauthEpoch) und Backoff bei 429/5xx/Netzwerkfehlern
 // (Umbrella-Spec §4.5/§7).
@@ -132,6 +145,7 @@ func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 
 		cloned := cloneRequestWithBody(req, bodyBytes)
 		t.injectXSRF(cloned)
+		t.setUserAgent(cloned)
 
 		resp, err := t.base.RoundTrip(cloned)
 		if err != nil {
