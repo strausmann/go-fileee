@@ -78,6 +78,7 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 | Auth/Session | `Login`, `Logout` (serverseitiger Widerruf + Jar-Clear), `EnsureSession`, automatische Re-Auth, TOTP-2FA, `AccountStatus` |
 | Dokumente | `Documents.Query` / `Diff` / `Get` / `Update` / `Upload`, `Search` (Volltext), `DownloadPDF`, `DownloadPageImage` |
 | Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt) |
+| Teilen | `Documents.Share` (Freigabe-Link) / `Unshare` |
 | FileeeBoxen | `Boxes.List` / `Get` / `AddDocument` / `RemoveDocument` |
 | Erinnerungen | `Reminders.Query` / `Diff` / `Get` / `Create` |
 | Kontakte | `Contacts.Query` / `Diff` / `Get` / `Create` / `Update` |
@@ -95,7 +96,7 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 
 | Funktion | API |
 |---|---|
-| Teilen (anonymer Link, an Kontakt) | `documents/rest/share`, Konversationen |
+| Teilen an einen Kontakt (Konversation) | Konversationen (`documents/rest/share` = Link-Freigabe ist abgedeckt) |
 | Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
 | Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
 | Seiten-Operationen | Merge/Split/Rotate/Extract/Reorder |
