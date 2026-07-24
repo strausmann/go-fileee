@@ -74,7 +74,7 @@ func (s *Server) registerDocumentRoutes(api huma.API) {
 // Cursor-Sync über Documents.Diff). Beide Zweige teilen sich Limit.
 type listDocumentsInput struct {
 	Query  string `query:"query" doc:"Volltextsuche (FULLTEXT/FUZZY über Documents.Search). Gesetzt aktiviert den Suchmodus statt des Diff-Modus."`
-	Limit  int    `query:"limit" doc:"Max. Anzahl Ergebnisse dieser Seite/dieses Suchlaufs." default:"100"`
+	Limit  int    `query:"limit" doc:"Max. Anzahl Ergebnisse dieser Seite/dieses Suchlaufs. Wirkt nur im Suchmodus (query gesetzt); im Diff-Modus (leeres query) wird es ignoriert." default:"100"`
 	Cursor string `query:"cursor" doc:"Opaques Cursor-Token aus einer vorigen Antwort dieses Endpunkts (nur im Diff-Modus relevant, d.h. wenn query leer ist). Leer = kompletter Sync von vorn."`
 }
 
@@ -226,7 +226,7 @@ func (s *Server) handleDownloadDocumentPDF(ctx context.Context, in *downloadDocu
 type downloadPageImageInput struct {
 	PageID  string           `path:"pageId" doc:"Seiten-ID."`
 	Size    fileee.ImageSize `query:"size" doc:"Bildgröße (smedium/medium)." default:"medium"`
-	Version int64            `query:"version" doc:"Aktuelle imageVersion der Seite (aus Document.Pages), NIE zwischenspeichern."`
+	Version int64            `query:"v" doc:"Aktuelle imageVersion der Seite (aus Document.Pages), NIE zwischenspeichern."`
 }
 
 // handleDownloadPageImage implementiert GET /v1/pages/{pageId}/image als Stream (Fallback-Weg
