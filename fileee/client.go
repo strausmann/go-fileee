@@ -62,6 +62,7 @@ type Client struct {
 	DocumentTypes ReadService[DocumentType]
 	Reminders     ReminderService
 	Boxes         BoxService
+	Processes     ProcessService
 
 	auth       *authClient
 	httpClient *http.Client
@@ -144,6 +145,7 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	c.DocumentTypes = newDocumentTypeService(c)
 	c.Reminders = newReminderService(c)
 	c.Boxes = newBoxService(c)
+	c.Processes = newProcessService(c)
 
 	if sess, err := store.Load(context.Background()); err == nil && sess != nil {
 		loadCookiesIntoJar(jar, cfg.baseURL, sess.Cookies)
