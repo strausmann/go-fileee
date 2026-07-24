@@ -22,6 +22,17 @@ belegt — beides gilt hier als „belegt", nicht als Vermutung. Nur die **wenig
 Punkte, die strukturell weder aus Traffic noch aus Code ableitbar sind (siehe §9), tragen noch
 den Marker „⚠️ nur Live-Verifikation kann das klären".
 
+> **Abgrenzung `go-fileee` (Library) vs. `cmd/fileee-server` (REST-Server):** Diese Datei
+> beschreibt das **interne, inoffizielle** Web-App-API von Fileee (`my.fileee.com`), das die
+> Go-Library `fileee/` kapselt — jederzeit änderbar, ohne Stabilitätszusage, wie oben
+> beschrieben. `cmd/fileee-server` setzt auf dieser Library auf und exponiert stattdessen eine
+> **stabile, selbst gehostete REST-Oberfläche** (`/v1/...`, OpenAPI-3.1-dokumentiert unter
+> `/openapi.json`/`/openapi.yaml`, interaktive Docs unter `/docs`) hinter einem statischen
+> API-Token. Integratoren (z. B. N8N-Workflows, CI-Automatisierung) sollten **immer** gegen
+> `fileee-server` sprechen, nicht gegen die in dieser Datei dokumentierten, rohen
+> Fileee-Endpunkte — Details, ENV-Konfiguration und Endpunkt-Übersicht des Servers stehen im
+> Abschnitt „fileee-server" der [README](../README.md#fileee-server).
+
 ---
 
 ## 0. Nachträge (Live-Verifikation 2026-07-24)

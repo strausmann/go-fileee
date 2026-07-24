@@ -94,10 +94,19 @@ services:
       # KEIN "pangolin.public-resources.fileee-server.auth.sso-enabled" Label
       # setzen — SSO wäre hier falsch, siehe Kopfkommentar dieser Datei.
       #
-      # Optionale zweite Kante: Basic-Auth NUR über /docs (OpenAPI-UI), damit
-      # die Doku nicht komplett offen im Netz hängt. Der eigentliche API-Zugriff
-      # bleibt weiterhin ausschließlich über FILEEE_API_TOKEN (Bearer) gesichert
-      # — Basic-Auth hier ist ein zusätzlicher Perimeter-Schutz, kein Ersatz.
+      # Optionale zweite Kante: zusätzliche Basic-Auth-Ebene über die GESAMTE
+      # Resource. Pangolins auth.basic-auth.* ist RESOURCE-WEIT — es gibt kein
+      # Pfad-Scoping innerhalb einer Resource, d. h. ein hier aktiviertes
+      # Basic-Auth-Label schützt NICHT nur /docs, sondern ALLE Pfade dieser
+      # Resource inkl. sämtlicher /v1/...-API-Routen zusätzlich zum
+      # FILEEE_API_TOKEN (Bearer) — Basic-Auth wäre hier ein zusätzlicher,
+      # aber pauschaler Perimeter-Schutz, kein Ersatz für den Token. Soll NUR
+      # /docs zusätzlich abgesichert werden, braucht es eine separate,
+      # pfad-gescopte Resource/Target für /docs (eigene full-domain oder
+      # eigenes Target mit path-match) — dafür bevorzugt stattdessen einfach
+      # FILEEE_DOCS_PUBLIC=false setzen (siehe README-Abschnitt
+      # "fileee-server" im Repo-Root), das braucht keine zweite Pangolin-
+      # Resource.
       # - "pangolin.public-resources.fileee-server.auth.basic-auth.user=claude-automation"
       # - "pangolin.public-resources.fileee-server.auth.basic-auth.password=CHANGE_ME_64_HEX_CHARS"
       # - "pangolin.public-resources.fileee-server.auth.basic-auth.extended-compatibility=false"

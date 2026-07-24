@@ -153,9 +153,11 @@ graph TD
     A["fileee/ (Core-Lib)"] --> B["cmd/fileee (generische CLI)"]
     A --> C["cmd/fileee-mcp (MCP-Server)"]
     A --> D["externe Consumer-Projekte"]
+    A --> H["cmd/fileee-server (REST-API-Service)"]
     B --> E["export / sync / download / upload → Disk-Archiv"]
     C --> F["AI-Zugriff (Claude Code / ChatGPT)"]
     D --> G["z. B. Paperless-Migration, Scanner-Upload"]
+    H --> I["N8N-Workflows / CI-Automatisierung via statischem API-Token"]
 ```
 
 | Komponente | Zweck |
@@ -163,6 +165,7 @@ graph TD
 | **Core-Lib** (`fileee/`) | Auth (Session-Cookie + TOTP), Entities, Download, Upload. Zustandslos — der Aufrufer hält den Sync-Cursor. Kein Ziel-/Fremdsystem-Wissen. |
 | **CLI** (`cmd/fileee`) | **Generische** CLI: `export` / `sync` / `download` / `upload` in ein dauerhaftes Disk-Archiv. Kein DMS-/zielsystem-spezifischer Code. |
 | **MCP-Server** (`cmd/fileee-mcp`) | Stellt Fileee-Inhalte für AI-Tools (Claude Code, ChatGPT, …) bereit. Da es sich um private Finanzdokumente handelt: **read-only als Default**, Transport/Auth bewusst gewählt. |
+| **REST-API-Service** (`cmd/fileee-server`) | Selbst gehosteter HTTP-Wrapper hinter einem statischen API-Token, gedacht für N8N/CI ohne direkten Fileee-Login. Details siehe [Abschnitt „fileee-server"](#fileee-server) unten. |
 | **Externe Consumer** | Importieren die Core-Lib als Go-Modul — z. B. eine Paperless-Migration oder ein Scanner-Projekt. Nicht Teil dieses Repos. |
 
 ## Geplante Modulstruktur
@@ -179,7 +182,9 @@ go-fileee/
 │   └── client.go          # HTTP-Client, Cookie-Jar, CSRF-Handling
 ├── cmd/
 │   ├── fileee/            # generische CLI: export / sync / download / upload
-│   └── fileee-mcp/        # MCP-Server für AI-Zugriff
+│   ├── fileee-mcp/        # MCP-Server für AI-Zugriff
+│   └── fileee-server/      # REST-API-Service (Huma/OpenAPI 3.1), siehe Abschnitt „fileee-server"
+├── deploy/                # Compose-Referenz-Templates + Dockerfile für fileee-server
 ├── docs/
 │   ├── API.md              # Fileee-API-Referenz (secret-safe, aus HAR rekonstruiert)
 │   └── adr/                # Architecture Decision Records
@@ -187,6 +192,125 @@ go-fileee/
 ```
 
 > Kein `internal/paperless` oder anderes zielsystem-spezifisches Paket — solche Integrationen sind externe Consumer-Projekte (siehe [ADR-0006](docs/adr/0006-domaenen-neutralitaet.md)).
+
+## fileee-server
+
+`cmd/fileee-server` ist ein selbst gehosteter REST-API-Service, der die Core-Lib hinter einem
+statischen API-Token exponiert — gedacht für **N8N-Workflows und CI-Automatisierung**, die Fileee
+ansprechen sollen, ohne selbst einen Fileee-Login (Username/Passwort/TOTP) zu kennen. Anders als
+die Core-Lib (Abschnitt oben), deren Methoden sich jederzeit mit dem internen Fileee-API ändern
+können, ist die vom Server exponierte `/v1/...`-Oberfläche **stabil und OpenAPI-3.1-dokumentiert**
+(siehe [`docs/API.md`](docs/API.md) Abgrenzung Library vs. Server). Architektur-Hintergrund:
+[ADR-0007](docs/adr/0007-ausschluss-destruktiver-operationen.md) (Destruktiv-Gate) und
+[ADR-0008](docs/adr/0008-fileee-server.md) (Server-Design).
+
+### Quickstart
+
+```bash
+# Einmalig: Session-Volume für den nonroot-User des Containers vorbereiten (uid 65532,
+# distroless-Image ohne Shell — siehe Kommentar in deploy/compose.plain.yaml).
+sudo mkdir -p <host-pfad-fuer-session> && sudo chown 65532:65532 <host-pfad-fuer-session>
+
+# .env / Compose-Platzhalter ("CHANGE_ME") mit echten Werten befüllen, dann:
+docker compose -f deploy/compose.plain.yaml up
+```
+
+`deploy/compose.plain.yaml` ist ein **Referenz-Template** (echtes GitOps-Deployment folgt in
+`infrastructure/docker/fileee-server`, siehe `.claude/rules/infrastructure-as-code-governance.md`
+im homelab-management-Repo). Zwei Konfigurationsmodi stehen zur Wahl:
+
+- **ENV-Modus** (`SECRET_BACKEND=env`, Default): alle Werte — inklusive Secrets — kommen direkt aus
+  den unten dokumentierten `FILEEE_*`-Umgebungsvariablen.
+- **Infisical-Dual-Mode** (`SECRET_BACKEND=infisical`): die Binary mintet beim Start selbst ein
+  Infisical-Token (`infisical login --method=universal-auth`), exportiert die Secrets
+  (`infisical export --format=dotenv`), merged sie in die Prozessumgebung und ersetzt sich per
+  `syscall.Exec` durch sich selbst (`fileee-server` wird dabei PID 1 — Signal-Forwarding ist damit
+  gegenstandslos). In diesem Modus entfallen die `FILEEE_USERNAME`/`FILEEE_PASSWORD`/
+  `FILEEE_API_TOKEN`/`FILEEE_TOTP_SEED`-ENV-Variablen; sie werden stattdessen aus Infisical
+  bezogen. Beispiel-Umschaltung: siehe auskommentierten Block in `deploy/compose.plain.yaml`.
+
+Drei Compose-Referenz-Templates liegen unter [`deploy/`](deploy/):
+
+| Datei | Szenario |
+|---|---|
+| `deploy/compose.plain.yaml` | Ohne Reverse Proxy — direkt per Port oder im internen Docker-Netz erreichbar. |
+| `deploy/compose.pangolin.yaml` | Öffentlich über Pangolin, **bewusst ohne SSO** (reiner Maschinen-Endpunkt, kein Browser-UI). |
+| `deploy/compose.traefik.yaml` | Hinter Traefik als Reverse Proxy. |
+
+### Konfiguration (Umgebungsvariablen)
+
+Alle Werte werden ausschließlich über `LoadConfig` (`cmd/fileee-server/config.go`) gelesen — kein
+Feld wird an anderer Stelle direkt aus `os.Getenv` bezogen.
+
+| Variable | Zweck | Default | Pflicht | Secret |
+|---|---|---|---|---|
+| `FILEEE_USERNAME` | Fileee-Login-Benutzername | – | Ja | Ja |
+| `FILEEE_PASSWORD` | Fileee-Login-Passwort | – | Ja | Ja |
+| `FILEEE_TOTP_SEED` | Base32-TOTP-Seed für Zwei-Faktor-Konten | leer | Nein (nur bei 2FA-Konten) | Ja |
+| `FILEEE_API_TOKEN` | Statisches Bearer-Token, mit dem sich Clients gegen den Server authentifizieren (`X-API-Key`- oder `Bearer`-Header) | – | Ja | Ja |
+| `FILEEE_ALLOW_DESTRUCTIVE` | Schaltet die drei Hard-DELETE-Routen frei (siehe Destruktiv-Gate unten) | `false` | Nein | Nein |
+| `FILEEE_LISTEN_ADDR` | Adresse, auf der der HTTP-Server lauscht | `:8080` | Nein | Nein |
+| `FILEEE_SESSION_PATH` | Pfad, unter dem die Fileee-Session persistiert wird | `/home/nonroot/session.json` | Nein | Nein (Dateiinhalt ist sensibel, Rechte `0600`) |
+| `FILEEE_KEEPALIVE_INTERVAL` | Intervall des Session-Keepalive | `15m` | Nein | Nein |
+| `FILEEE_WAIT_TIMEOUT` | Default-Wartezeit von `POST /v1/processes/{id}/wait`, falls kein `?timeout=` mitgeschickt wird | `60s` | Nein | Nein |
+| `FILEEE_WAIT_MAX` | Obergrenze, auf die jedes angeforderte Wait-Timeout gedeckelt wird | `300s` | Nein | Nein |
+| `FILEEE_RATE_RPS` | Erlaubte Request-Rate/Sekunde gegen die Fileee-API | `1` | Nein | Nein |
+| `FILEEE_RATE_BURST` | Burst-Größe des Token-Buckets | `3` | Nein | Nein |
+| `FILEEE_TRUSTED_PROXIES` | Kommagetrennte IPs/CIDRs vertrauenswürdiger Reverse-Proxies (Access-Log/Client-IP-Ermittlung) | leer | Nein | Nein |
+| `FILEEE_CLIENT_IP_HEADERS` | Kommagetrennte Header-Prüfreihenfolge zur Client-IP-Ermittlung | `CF-Connecting-IP,X-Real-IP,X-Forwarded-For` | Nein | Nein |
+| `FILEEE_DOCS_PUBLIC` | Ob `/docs` (Doku-UI) ohne API-Token erreichbar ist | `true` | Nein | Nein |
+| `FILEEE_MAX_UPLOAD_SIZE` | Max. Body-Größe von `POST /v1/documents` in Bytes | `33554432` (32 MiB) | Nein | Nein |
+| `FILEEE_WEBHOOK_URL` | Ziel-URL für ausgehende Webhook-Benachrichtigungen | leer (Webhooks deaktiviert) | Nein | Nein |
+| `FILEEE_WEBHOOK_SECRET` | Signiert ausgehende Webhook-Payloads | leer | Nein | Ja |
+| `FILEEE_WATCH_INTERVAL` | Polling-Intervall des Änderungs-Watchers | `0` (Watcher deaktiviert) | Nein | Nein |
+| `FILEEE_USER_AGENT` | Überschreibt den User-Agent gegen Fileee | leer (Core-Lib-Default) | Nein | Nein |
+| `FILEEE_LOG_LEVEL` | Log-Level des strukturierten Loggers (`slog`) | `info` | Nein | Nein |
+
+**Secret-Backend / Infisical-Dual-Mode** (`cmd/fileee-server/secrets.go`, optional — nur relevant, wenn `SECRET_BACKEND=infisical` gesetzt ist oder eine Universal-Auth-Client-ID vorliegt):
+
+| Variable | Zweck | Default | Pflicht (im Infisical-Modus) | Secret |
+|---|---|---|---|---|
+| `SECRET_BACKEND` | `env` (Default) oder `infisical` | `env` | Nein | Nein |
+| `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` | Machine-Identity Client-ID | – | Ja | Ja |
+| `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET` | Machine-Identity Client-Secret | – | Ja | Ja |
+| `INFISICAL_DOMAIN` | Self-hosted Infisical-URL, **mit** `/api` (z. B. `https://secretsmanager.strausmann.cloud/api`) | – | Ja | Nein |
+| `INFISICAL_PROJECT_ID` | Ziel-Projekt-ID | – | Ja | Nein |
+| `INFISICAL_ENV` | Ziel-Environment (`dev`/`staging`/`prod`) | – | Ja (CLI-Default wäre sonst `dev` — für `prod` fatal, siehe `.claude/rules/secret-environment-awareness.md` im homelab-management-Repo) | Nein |
+| `INFISICAL_PATH` | Secret-Pfad/Folder innerhalb des Projekts | `/` | Nein | Nein |
+
+### Endpunkt-Übersicht
+
+Alle Routen liegen unter `/v1/...` (Ausnahme `/healthz`). Vollständige, maschinenlesbare
+Beschreibung: OpenAPI 3.1 unter `/openapi.json`/`/openapi.yaml`, interaktive Docs unter `/docs`
+(`FILEEE_DOCS_PUBLIC` steuert, ob `/docs` ohne Token erreichbar ist).
+
+| Gruppe | Routen |
+|---|---|
+| **Dokumente/Seiten** (Read, PDF-/Bild-Streams, OCR) | `GET /v1/documents` (Liste/Volltextsuche), `GET /v1/documents/{id}`, `GET /v1/documents/{id}/pdf`, `GET /v1/pages/{pageId}/image`, `GET /v1/pages/{pageId}/ocr` |
+| **Stammdaten** (Tags/Companies/Contacts/Document-Types/Schemes/Reminders/Boxes) | `GET /v1/tags`, `GET /v1/companies`, `GET /v1/contacts`, `GET /v1/document-types`, `GET /v1/document-type-schemes`, `GET /v1/reminders`, `GET /v1/boxes`, `GET /v1/boxes/{id}` |
+| **Write** (Upload/Update/Share/Unshare/Box/Reminders/Contacts/Export-ZIP/Processes/Wait) | `POST /v1/documents` (Upload, multipart), `PUT /v1/documents/{id}`, `POST /v1/share`, `POST /v1/documents/{id}/unshare`, `POST` bzw. `DELETE /v1/boxes/{boxId}/documents/{docId}` (Einheften/Aushängen, kein Destruktiv-Gate), `POST /v1/reminders`, `PUT /v1/reminders/{id}`, `POST /v1/contacts`, `PUT /v1/contacts/{id}`, `POST /v1/documents/export-zip`, `GET /v1/processes/{id}` (Poll), `POST /v1/processes/{id}/wait` (blockierend, auf `FILEEE_WAIT_MAX` gedeckelt) |
+| **Share-Proxy** (anonym, ohne Fileee-Login, `/v1/share-objects/...`) | `POST /v1/share-objects/{token}` (auflösen), `GET /v1/share-objects/{token}/pages/{pageId}/image`, `GET /v1/share-objects/{token}/pages/{pageId}/ocr`, `GET /v1/share-objects/{token}/documents/{docId}/pdf` |
+| **Resolver** (ein Link rein, ein einheitliches Dokument raus) | `POST /v1/resolve {url}` — erkennt intern vs. anonym per `?include=ocr` |
+| **Konversationen** (Chat, Teilnehmer, Einladungen) | `GET /v1/conversations`, `GET /v1/conversations/{id}`, `GET /v1/documents/{id}/conversations`, `POST /v1/conversations/{id}/messages`, `POST`/`DELETE /v1/conversations/{id}/documents/{docId}` (kein Destruktiv-Gate), `POST /v1/conversations/{id}/participants`, `DELETE /v1/conversations/{id}/participants/{participantId}`, `GET /v1/conversations/invitations`, `POST /v1/conversations/invitations/accept/{token}` (Annahme-Pfad bewusst `.../accept/{token}`, nicht `.../{token}/accept` — vermeidet einen Go-`ServeMux`-Pattern-Konflikt mit der Dokument-Teilen-Route) |
+| **Destruktiv (Hard-DELETE)** | `DELETE /v1/documents/{id}`, `DELETE /v1/contacts/{id}`, `DELETE /v1/reminders/{id}` |
+| **Sonstiges** | `GET /healthz` (Liveness, kein Auth nötig, kein Fileee-Roundtrip) |
+
+**Destruktiv-Gate:** Die drei Hard-DELETE-Routen (`DELETE /v1/documents/{id}`,
+`DELETE /v1/contacts/{id}`, `DELETE /v1/reminders/{id}`) werden nur registriert, wenn
+`FILEEE_ALLOW_DESTRUCTIVE=true` gesetzt ist. Bleibt das Flag `false`, ist der DELETE-Pfad dem
+Server für das DELETE-Verb komplett unbekannt — da GET/PUT auf denselben Pfaden weiterhin
+registriert sind, antwortet der Server dann mit **405 Method Not Allowed** statt 404. Jede
+tatsächlich ausgeführte Destruktiv-Operation wird zusätzlich vor dem Löschversuch als
+Audit-Log-Zeile protokolliert. Das Aushängen aus einer Box (`DELETE /v1/boxes/{boxId}/documents/{docId}`)
+und das Entfernen aus einer Konversation (`DELETE /v1/conversations/{id}/documents/{docId}`) fallen
+**nicht** unter dieses Gate — beides löscht kein Dokument, sondern nimmt nur eine Zuordnung zurück.
+
+### Auth
+
+Jeder Request (außer `/healthz`, `/openapi.json`, `/openapi.yaml` sowie `/docs` bei
+`FILEEE_DOCS_PUBLIC=true`) braucht das statische `FILEEE_API_TOKEN` als `X-API-Key`- oder
+`Bearer`-Header. Details zum Betrieb hinter Pangolin (bewusst ohne SSO) siehe
+`deploy/compose.pangolin.yaml`.
 
 ## Auth-Modell (Kurzfassung)
 
