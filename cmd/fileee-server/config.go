@@ -87,6 +87,28 @@ type Config struct {
 	LogLevel string
 }
 
+// String liefert eine für Logs und Debug-Ausgaben sichere Textdarstellung von Config: die vier
+// Secret-Felder (FileeePassword, APIToken, WebhookSecret, FileeeTOTPSeed) werden maskiert
+// ("***" wenn gesetzt, "" wenn leer) — kein Secret-Wert darf jemals im Klartext in Logs oder
+// über fmt.Sprintf("%v", ...) (Stringer-Interface) landen. Alle übrigen Felder erscheinen
+// unverändert. Die Umwandlung in configAlias verhindert eine Endlosrekursion, die entstünde,
+// würde %v direkt auf c (Typ Config, mit String()-Methode) angewendet.
+func (c Config) String() string {
+	mask := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return "***"
+	}
+	c.FileeePassword = mask(c.FileeePassword)
+	c.APIToken = mask(c.APIToken)
+	c.WebhookSecret = mask(c.WebhookSecret)
+	c.FileeeTOTPSeed = mask(c.FileeeTOTPSeed)
+
+	type configAlias Config
+	return fmt.Sprintf("%+v", configAlias(c))
+}
+
 // defaultClientIPHeaders sind die Header, aus denen ohne explizite Konfiguration die
 // Client-IP ermittelt wird — in Prüfreihenfolge: Cloudflare zuerst, dann generische
 // Reverse-Proxy-Header.
@@ -211,11 +233,15 @@ func getDuration(getenv func(string) string, key string, def time.Duration) time
 }
 
 // getCSV liest key als kommagetrennte Liste, trimmt Leerzeichen und lässt leere Einträge weg.
-// Ist die Variable leer/nicht gesetzt, wird def zurückgegeben (auch wenn def nil ist).
+// Ist die Variable leer/nicht gesetzt, wird eine defensive Kopie von def zurückgegeben (auch
+// wenn def nil ist) — niemals def selbst. Ohne diese Kopie würden mehrere per LoadConfig
+// erzeugte Configs (z. B. mit unverändertem ClientIPHeaders-Default) dasselbe Backing-Array
+// teilen; eine In-Place-Mutation bei einer Config würde dann unbemerkt den package-globalen
+// Default und damit alle anderen Configs korrumpieren.
 func getCSV(getenv func(string) string, key string, def []string) []string {
 	v := getenv(key)
 	if v == "" {
-		return def
+		return append([]string(nil), def...)
 	}
 	parts := strings.Split(v, ",")
 	out := make([]string, 0, len(parts))

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,42 +93,63 @@ func TestLoadConfig_Overrides(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	switch {
-	case c.FileeeTOTPSeed != "SEED123":
+	// Sequentielle if-Blöcke statt eines bare switch: ein switch-ohne-Ausdruck wählt nur den
+	// ERSTEN zutreffenden case und bricht danach ab — bei mehreren gleichzeitig falschen
+	// Feldern sieht man in einem Testlauf nur die erste Abweichung, alle weiteren bleiben
+	// verdeckt. Mit if-Blöcken (wie in TestLoadConfig_InvalidValuesFallBackToDefault) meldet
+	// t.Errorf jede abweichende Zuweisung einzeln, ohne den Testlauf abzubrechen.
+	if c.FileeeTOTPSeed != "SEED123" {
 		t.Errorf("FileeeTOTPSeed = %q", c.FileeeTOTPSeed)
-	case !c.AllowDestructive:
+	}
+	if !c.AllowDestructive {
 		t.Error("AllowDestructive sollte true sein")
-	case c.ListenAddr != ":9090":
+	}
+	if c.ListenAddr != ":9090" {
 		t.Errorf("ListenAddr = %q", c.ListenAddr)
-	case c.SessionPath != "/tmp/session.json":
+	}
+	if c.SessionPath != "/tmp/session.json" {
 		t.Errorf("SessionPath = %q", c.SessionPath)
-	case c.KeepAliveInterval != 5*time.Minute:
+	}
+	if c.KeepAliveInterval != 5*time.Minute {
 		t.Errorf("KeepAliveInterval = %v", c.KeepAliveInterval)
-	case c.WaitTimeout != 10*time.Second:
+	}
+	if c.WaitTimeout != 10*time.Second {
 		t.Errorf("WaitTimeout = %v", c.WaitTimeout)
-	case c.WaitMax != 90*time.Second:
+	}
+	if c.WaitMax != 90*time.Second {
 		t.Errorf("WaitMax = %v", c.WaitMax)
-	case c.RateRPS != 2.5:
+	}
+	if c.RateRPS != 2.5 {
 		t.Errorf("RateRPS = %v", c.RateRPS)
-	case c.RateBurst != 7:
+	}
+	if c.RateBurst != 7 {
 		t.Errorf("RateBurst = %v", c.RateBurst)
-	case !reflect.DeepEqual(c.TrustedProxies, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}):
+	}
+	if !reflect.DeepEqual(c.TrustedProxies, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}) {
 		t.Errorf("TrustedProxies = %v", c.TrustedProxies)
-	case !reflect.DeepEqual(c.ClientIPHeaders, []string{"X-Custom-IP", "X-Real-IP"}):
+	}
+	if !reflect.DeepEqual(c.ClientIPHeaders, []string{"X-Custom-IP", "X-Real-IP"}) {
 		t.Errorf("ClientIPHeaders = %v", c.ClientIPHeaders)
-	case c.DocsPublic:
+	}
+	if c.DocsPublic {
 		t.Error("DocsPublic sollte false sein")
-	case c.MaxUploadBytes != 1048576:
+	}
+	if c.MaxUploadBytes != 1048576 {
 		t.Errorf("MaxUploadBytes = %v", c.MaxUploadBytes)
-	case c.WebhookURL != "https://example.invalid/hook":
+	}
+	if c.WebhookURL != "https://example.invalid/hook" {
 		t.Errorf("WebhookURL = %q", c.WebhookURL)
-	case c.WebhookSecret != "whsec":
+	}
+	if c.WebhookSecret != "whsec" {
 		t.Errorf("WebhookSecret = %q", c.WebhookSecret)
-	case c.WatchInterval != 30*time.Second:
+	}
+	if c.WatchInterval != 30*time.Second {
 		t.Errorf("WatchInterval = %v", c.WatchInterval)
-	case c.UserAgent != "fileee-server-test/1.0":
+	}
+	if c.UserAgent != "fileee-server-test/1.0" {
 		t.Errorf("UserAgent = %q", c.UserAgent)
-	case c.LogLevel != "debug":
+	}
+	if c.LogLevel != "debug" {
 		t.Errorf("LogLevel = %q", c.LogLevel)
 	}
 
@@ -221,5 +243,90 @@ func TestGetCSV(t *testing.T) {
 	def := []string{"fallback"}
 	if got := getCSV(getenv, "UNSET", def); !reflect.DeepEqual(got, def) {
 		t.Errorf("getCSV(UNSET, def) = %v, erwartet %v", got, def)
+	}
+}
+
+// TestGetCSV_DefaultNotAliased prüft, dass getCSV bei ungesetzter Variable eine defensive
+// Kopie von def zurückgibt statt def selbst — sonst würde eine In-Place-Mutation des
+// zurückgegebenen Slices den vom Aufrufer übergebenen Default (z. B. das package-globale
+// defaultClientIPHeaders) korrumpieren.
+func TestGetCSV_DefaultNotAliased(t *testing.T) {
+	getenv := func(string) string { return "" }
+	def := []string{"a", "b"}
+
+	got := getCSV(getenv, "UNSET", def)
+	got[0] = "MUTATED"
+
+	if def[0] == "MUTATED" {
+		t.Fatalf("getCSV gab def by reference zurück — Mutation von got hat def korrumpiert: %v", def)
+	}
+}
+
+// TestLoadConfig_DefaultClientIPHeadersNotShared stellt sicher, dass zwei per LoadConfig
+// erzeugte Configs mit unverändertem FILEEE_CLIENT_IP_HEADERS-Default kein gemeinsames
+// Backing-Array für ClientIPHeaders besitzen. Ohne defensive Kopie in getCSV würden beide
+// Configs auf das package-globale defaultClientIPHeaders-Array zeigen — eine In-Place-Mutation
+// bei einer Config würde dann unbemerkt jede andere Config (und alle Tests) mitverändern.
+func TestLoadConfig_DefaultClientIPHeadersNotShared(t *testing.T) {
+	env := requiredEnv()
+	getenv := func(k string) string { return env[k] }
+
+	c1, err := LoadConfig(getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1.ClientIPHeaders[0] = "MUTATED"
+
+	c2, err := LoadConfig(getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.ClientIPHeaders[0] != "CF-Connecting-IP" {
+		t.Fatalf("ClientIPHeaders von c2 wurde durch Mutation von c1 korrumpiert: %v", c2.ClientIPHeaders)
+	}
+}
+
+// TestConfig_String_MasksSecrets prüft, dass Config.String() (und damit fmt.Sprintf("%v", ...))
+// keinen der vier Secret-Werte im Klartext preisgibt, gesetzte Secrets aber als "***" und leere
+// Secrets als "" markiert, während Nicht-Secret-Felder (z. B. ListenAddr) unverändert erscheinen.
+func TestConfig_String_MasksSecrets(t *testing.T) {
+	c := Config{
+		FileeeUsername: "user1",
+		FileeePassword: "supersecretpw",
+		FileeeTOTPSeed: "SEEDVALUE123",
+		APIToken:       "tok-abc123",
+		WebhookSecret:  "whsec-xyz",
+		ListenAddr:     ":9090",
+	}
+
+	secrets := []string{"supersecretpw", "SEEDVALUE123", "tok-abc123", "whsec-xyz"}
+
+	s := c.String()
+	for _, secret := range secrets {
+		if strings.Contains(s, secret) {
+			t.Errorf("String() enthält Secret-Wert %q im Klartext: %s", secret, s)
+		}
+	}
+	if !strings.Contains(s, ":9090") {
+		t.Errorf("String() sollte Nicht-Secret-Feld ListenAddr zeigen: %s", s)
+	}
+	if !strings.Contains(s, "***") {
+		t.Errorf("String() sollte gesetzte Secrets als *** maskieren: %s", s)
+	}
+
+	// fmt.Sprintf("%v", ...) muss automatisch String() nutzen (Stringer-Interface) — kein
+	// Secret darf auch über diesen Weg im Klartext landen.
+	sprintf := fmt.Sprintf("%v", c)
+	for _, secret := range secrets {
+		if strings.Contains(sprintf, secret) {
+			t.Errorf("fmt.Sprintf(%%v) enthält Secret-Wert %q im Klartext: %s", secret, sprintf)
+		}
+	}
+
+	// Leere Secrets müssen als "" erscheinen, nicht als "***".
+	empty := Config{ListenAddr: ":8080"}
+	got := empty.String()
+	if strings.Contains(got, "***") {
+		t.Errorf("String() sollte leere Secrets nicht als *** maskieren: %s", got)
 	}
 }

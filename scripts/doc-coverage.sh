@@ -19,7 +19,7 @@ while IFS= read -r file; do
     /^(const|var) [A-Z]/ { if(!hascomment) print F":"NR": "$1" "$2; hascomment=0; next }
     { hascomment=0 }
   ' "$file"
-done < <(find fileee -name '*.go' ! -name '*_test.go') | sort | tee "$gaps"
+done < <(find fileee cmd -name '*.go' ! -name '*_test.go') | sort | tee "$gaps"
 n=$(wc -l < "$gaps" | tr -d ' ')
 echo "Undokumentierte exportierte Symbole: $n"
 [ "$n" -eq 0 ] || exit 1
