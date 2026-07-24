@@ -1,6 +1,6 @@
 # Fileee Interne API — konsolidierte Vollreferenz
 
-**Datum:** 2026-07-23
+**Datum:** 2026-07-24 (Nachträge §0)
 **Quelle:** 3 HAR-Mitschnitte einer eingeloggten `my.fileee.com`-Session (561 + 335 + 404 Requests,
 secret-safe strukturell ausgewertet) **plus** eine anschließende Offline-Code-Analyse von
 **416 eindeutigen JS-Bundle-Dateien** (8,5 MB, aus denselben HARs extrahiert, SHA-256-dedupliziert),
@@ -21,6 +21,41 @@ ist entweder aus echtem Live-Traffic **oder** aus dem tatsächlich ausgeführten
 belegt — beides gilt hier als „belegt", nicht als Vermutung. Nur die **wenigen** verbleibenden
 Punkte, die strukturell weder aus Traffic noch aus Code ableitbar sind (siehe §9), tragen noch
 den Marker „⚠️ nur Live-Verifikation kann das klären".
+
+---
+
+## 0. Nachträge (Live-Verifikation 2026-07-24)
+
+Diese Runde hat mehrere Punkte gegen das **echte** Konto verifiziert und einige frühere Annahmen
+korrigiert. Bei Widerspruch gilt dieser Abschnitt.
+
+- **Volltextsuche** (`POST /api/documents/rest/query`): jedes `criteria[]`-Element braucht `field`
+  UND `value` je mit `serializeInformation.type`. Volltext = `field.value`
+  **`DocumentQueries:FULLTEXT`** (`type Enum`), `operator` **`FUZZY`**, `value` = Suchbegriff
+  (`type String`). Die UI hängt vier Status-Ausschlüsse an (`field`
+  `DocumentField:DOCUMENT_INFORMATION__STATUS`, `NEQ`, `value`
+  `PublicDocumentStatus:{UPLOADING|DELETED|ERROR|NEW}`). Feldnamen sind DSL-Konstanten, KEINE
+  Attribut-Pfade.
+- **ZIP-Export** („Alle Dokumente herunterladen"): `POST /api/documents/rest/zip`
+  `{documentIds:[] = alle, zipPassword:<pflicht>}` → **Process-Objekt**; Status via
+  **`GET /api/processes/:id`** (`type io.fileee.shared.process.DownloadAllProcess`), **NICHT** über
+  `.../zip/{jobId}`. Das ZIP ist passwortgeschützt.
+- **Erinnerung anlegen**: `POST /api/reminders/rest` mit `id, description, detailedDescription,
+  documentId, startDate, done, deleted, version`. **`startDate` ist bare Date `YYYY-MM-DD`**;
+  `created`/`modified` NICHT mitsenden (sonst 500).
+- **FileeeBoxen**: `POST /api/fileeeboxes/rest/diff` mit `localResults:[]` **enumeriert alle Boxen**
+  (`FileeeBoxDTO`: `id, boxNr, boxName, qrCode, productCode, documents[], removedDocuments[], …`).
+  Einheften `POST /api/fileeeboxes/:boxId/:documentId` (leerer Body, XSRF, 200), Entfernen per
+  `DELETE`. `boxNr` = das `@box<N>` im Scan2Mail-Betreff (kombinierbar mit `#Tag`). Box = physisches
+  Produkt oder fileeeDIY-Selbstbau (`productCode`).
+- **Teilen**: `POST /api/documents/rest/share?documentIds=<csv>` → `{link, shareId}` (Link
+  login-pflichtig); `POST /api/documents/rest/:id/unshare` → 200. Anonymer Link-Abruf:
+  `POST /api/share-objects/:token` (Body `{}`, XSRF, ohne Login) — **nicht** `/api/shares/get/...`.
+- **Logout**: `POST /api/f/logout` **widerruft das JWT serverseitig** — das alte Token liefert danach
+  `authorized:false` (HTTP 200, kein 401). Session-Lebensdauer: `JSESSIONID`/`rememberMe` ~365 Tage,
+  `XSRF-TOKEN` 24 h.
+- **Revision-Lock (`POST :id/revision-lock`)**: kann ein Dokument serverseitig **unserialisierbar**
+  machen (danach 500 bei GET/diff/query) — in `go-fileee` bewusst nicht implementiert.
 
 ---
 
@@ -542,9 +577,11 @@ Body-Schema (`CreateDocumentZipRequest`):
 }
 ```
 
-Ablauf: `POST .../zip` (Job starten) → **`GET /api/documents/rest/zip/:jobId`** (Status pollen,
-NEU) → **`DELETE /api/documents/rest/zip/:jobId`** (abbrechen, NEU). Passt zum
-`ServerProcess`-Konzept (asynchrone Hintergrund-Jobs, §4.8).
+Ablauf (**korrigiert 2026-07-24, siehe §0**): `POST /api/documents/rest/zip`
+`{documentIds:[]=alle, zipPassword}` → **Process-Objekt**; Status via **`GET /api/processes/:id`**
+(`type io.fileee.shared.process.DownloadAllProcess`). Der früher hier vermutete
+`GET/DELETE /api/documents/rest/zip/:jobId`-Pfad ist **nicht** der reale Weg — der Job ist ein
+`ServerProcess` und wird über die `processes`-Ressource gepollt.
 
 #### `GET /api/v1/documents/:id/pdf?mode=<download|print>` — Original-PDF (Werte jetzt vollständig belegt)
 
@@ -617,10 +654,15 @@ Vermutlich setzt ein „normales" Löschen aus der UI zunächst nur das `deleted
 `rows[].deleted`) bzw. verschiebt in diese separate Ressource — der genaue Übergangsmechanismus
 (PUT mit `deleted=true` vs. eigener Move-Endpunkt) ist ⚠️ nicht abschließend im Code verfolgt.
 
-### 4.3 Fileee-Boxes (NEU, bisher unbekannte Ressource)
+### 4.3 Fileee-Boxes (LIVE geklärt 2026-07-24 — siehe §0)
 
-„Fileee-Box" ist ein bisher nicht dokumentiertes Organisationskonzept (vermutlich ein Ordner/eine
-Sammel-Ablage für Dokumente, ähnlich eines Shared-Space):
+Eine **FileeeBox** ist eine per QR-Code identifizierte Ablagebox — das physische fileeeBox-Produkt
+oder eine selbstgebaute fileeeDIY-Box (`productCode` unterscheidet die Variante) — deren
+Dokument-Zuordnung digital verwaltet wird. Enumeration über `POST /api/fileeeboxes/rest/diff`
+(`localResults:[]`), Einzelabruf über `GET /api/fileeeboxes/rest/:id`. Modell `FileeeBoxDTO`: `id`,
+`boxNr` (= `@box<N>` im Scan2Mail-Betreff), `boxName`, `qrCode`, `productCode`, `documents[]`
+(`{documentId, pageCount, modified}`), `removedDocuments[]`, `version`, `created`, `modified`,
+`deleted`. Einheften/Entfernen von Dokumenten:
 
 | Endpunkt | Zweck |
 |---|---|
