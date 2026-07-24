@@ -30,15 +30,17 @@
 //		"context"
 //		"fmt"
 //		"log"
+//		"os"
 //
 //		"github.com/strausmann/go-fileee/fileee"
 //	)
 //
 //	func main() {
+//		// Credentials aus einer Secret-Quelle laden, nie hartkodieren.
 //		client, err := fileee.New(fileee.Credentials{
-//			Username: "user@example.com",
-//			Password: "geheim",
-//			TOTPSeed: "", // Base32-Seed, falls Zwei-Faktor aktiv ist
+//			Username: os.Getenv("FILEEE_USERNAME"),
+//			Password: os.Getenv("FILEEE_PASSWORD"),
+//			TOTPSeed: os.Getenv("FILEEE_TOTP_SEED"), // Base32-Seed, falls Zwei-Faktor aktiv ist
 //		})
 //		if err != nil {
 //			log.Fatal(err)
