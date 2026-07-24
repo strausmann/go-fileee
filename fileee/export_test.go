@@ -3,7 +3,10 @@ package fileee
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestDocuments_ExportZIP_WireForm(t *testing.T) {
@@ -62,5 +65,57 @@ func TestProcesses_Get(t *testing.T) {
 	}
 	if proc.Status != "Running" {
 		t.Errorf("status = %q, erwartet Running", proc.Status)
+	}
+}
+
+// statefulProcessServer liefert für GET /api/processes/<id> nacheinander die übergebenen
+// JSON-Bodies (Status-Verlauf), damit WaitForProcess über mehrere Polls getestet werden kann.
+// EnsureSession-Routen werden vorab bedient.
+func statefulProcessServer(t *testing.T, id string, bodies ...string) *httptest.Server {
+	t.Helper()
+	auth := jsonHandler(t, ensureSessionRoutes())
+	var i int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/processes/"+id {
+			b := bodies[i]
+			if i < len(bodies)-1 {
+				i++
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(b))
+			return
+		}
+		auth(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestWaitForProcess_PollsUntilTerminal(t *testing.T) {
+	srv := statefulProcessServer(t, "p1",
+		`{"id":"p1","status":"Waiting"}`,
+		`{"id":"p1","status":"Running"}`,
+		`{"id":"p1","status":"Finished","documents":{"downloadUrl":"x"}}`,
+	)
+	c := newTestClientAgainstMockServer(t, srv)
+
+	proc, err := c.WaitForProcess(context.Background(), "p1", WaitOptions{Interval: time.Millisecond})
+	if err != nil {
+		t.Fatalf("WaitForProcess: %v", err)
+	}
+	if proc.Status != "Finished" {
+		t.Fatalf("erwartet Terminal-Status Finished, bekommen %q", proc.Status)
+	}
+}
+
+func TestWaitForProcess_ContextCancel(t *testing.T) {
+	srv := statefulProcessServer(t, "p1", `{"id":"p1","status":"Running"}`)
+	c := newTestClientAgainstMockServer(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.WaitForProcess(ctx, "p1", WaitOptions{Interval: time.Millisecond}); err == nil {
+		t.Fatal("erwartet Fehler bei abgebrochenem Context, bekommen nil")
 	}
 }

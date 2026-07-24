@@ -6,13 +6,32 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
-// Prozess-Status eines serverseitigen Vorgangs (z. B. ZIP-Export).
+// Prozess-Status eines serverseitigen Vorgangs (z. B. ZIP-Export). Waiting/Running sind die beiden
+// LIVE belegten Nicht-Terminal-Zustände; der Terminal-Status-String (z. B. beim fertigen ZIP-Export)
+// ist noch nicht verifiziert, weshalb IsTerminal bewusst über die Abwesenheit dieser beiden prüft,
+// statt einen konkreten "Finished"-Wert zu raten.
 const (
 	ProcessStatusWaiting = "Waiting"
 	ProcessStatusRunning = "Running"
 )
+
+// IsTerminal meldet, ob der Vorgang nicht mehr läuft (Status ist weder Waiting noch Running). Ein
+// nachgelagerter Terminal-Status-String wird bewusst nicht angenommen — jeder andere Status gilt als
+// abgeschlossen (erfolgreich ODER fehlerhaft; DocumentErrors prüfen).
+func (p *Process) IsTerminal() bool {
+	return p.Status != ProcessStatusWaiting && p.Status != ProcessStatusRunning
+}
+
+// WaitOptions steuert das Polling von WaitForProcess.
+type WaitOptions struct {
+	// Interval ist der Abstand zwischen zwei Statusabfragen. <= 0 verwendet defaultPollInterval.
+	Interval time.Duration
+}
+
+const defaultPollInterval = 2 * time.Second
 
 // Process ist ein asynchroner serverseitiger Vorgang. Der ZIP-Export ("Alle Dokumente
 // herunterladen") läuft als Process vom Typ io.fileee.shared.process.DownloadAllProcess; sein
@@ -54,6 +73,32 @@ func (s *processService) Get(ctx context.Context, id string) (*Process, error) {
 		return nil, err
 	}
 	return decodeProcess(resp)
+}
+
+// WaitForProcess pollt GET /api/processes/:id, bis der Vorgang terminal ist (IsTerminal) oder der
+// Context abläuft, und liefert den finalen Prozess-Stand. Nützlich nach ExportZIP/ExportAll, um auf
+// das fertige Ergebnis zu warten. Hinweis: Der konkrete Feldname der ZIP-Download-URL im fertigen
+// DownloadAllProcess ist noch nicht verifiziert (der finale Snapshot wurde bisher nicht erfasst) —
+// der Aufrufer inspiziert dazu Process.Documents (json.RawMessage) selbst.
+func (c *Client) WaitForProcess(ctx context.Context, id string, opts WaitOptions) (*Process, error) {
+	interval := opts.Interval
+	if interval <= 0 {
+		interval = defaultPollInterval
+	}
+	for {
+		proc, err := c.Processes.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if proc.IsTerminal() {
+			return proc, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
 }
 
 type zipExportRequest struct {

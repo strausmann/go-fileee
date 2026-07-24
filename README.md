@@ -98,7 +98,7 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 |---|---|
 | Auth/Session | `Login`, `Logout` (serverseitiger Widerruf + Jar-Clear), `EnsureSession`, automatische Re-Auth, TOTP-2FA, `AccountStatus` |
 | Dokumente | `Documents.Query` / `Diff` / `Get` / `Update` / `Upload`, `Search` (Volltext), `DownloadPDF`, `DownloadPageImage` |
-| Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt) |
+| Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt), `WaitForProcess` (pollt bis terminal) |
 | Teilen | `Documents.Share` (Freigabe-Link) / `Unshare` |
 | Share-Link nutzen (anonym) | `NewShareClient` → `Resolve(token)` / `DownloadPageImage` (ohne Login, z. B. für N8N-Webhook-Flows); `ShareTokenFromLink` |
 | Dokumenttyp-Felder | `DocumentTypeSchemes` (`Query`/`Diff`/`Get`, `Fields()` je Typ) |
@@ -122,7 +122,7 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 |---|---|
 | Teilen an einen Kontakt (Konversation) | Konversationen (`documents/rest/share` = Link-Freigabe ist abgedeckt) |
 | Anonymer Voll-PDF-Download eines Share-Links | Endpunkt noch nicht verifiziert (Seitenbild via `ShareClient.DownloadPageImage` ist abgedeckt) |
-| „Alle Dateien" ZIP-Datei abholen | Export-Start + Prozess-Polling abgedeckt; die finale ZIP-Download-URL des fertigen Prozesses noch offen |
+| „Alle Dateien" ZIP-Datei abholen | Export-Start + Warten bis fertig (`WaitForProcess`) abgedeckt; der finale ZIP-**Byte-Download** noch offen — der Feldname der Download-URL im fertigen `DownloadAllProcess` ist noch nicht verifiziert (finaler Prozess-Snapshot fehlt), wird daher bewusst nicht geraten |
 | Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
 | Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
 | Seiten-Operationen | Merge/Split/Rotate/Extract/Reorder |
