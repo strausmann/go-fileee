@@ -491,14 +491,17 @@ Nach dem Upload läuft die Analyse **asynchron**: `status` durchläuft
 erreicht war. Fileee klassifiziert hochgeladene Dokumente **automatisch**: die Test-Rechnung erhielt
 `attributes.data.documentTypeId.value = "bill"` und folgende Felder wurden automatisch extrahiert:
 `invoiceId`, `invoiceDate`, `amount`, `senderId`, `customerId`, `bankAccount1.iban`,
-`paymentReference`, `title`. **`invoiceDueDate` wurde NICHT automatisch extrahiert** — dieses Feld
-bleibt auch bei einer klar erkannten Rechnung leer und muss ggf. manuell/nachgelagert gesetzt
-werden.
+`paymentReference`, `title`. **`invoiceDueDate` wurde hier NICHT automatisch extrahiert** — das ist
+**normal**: Fileees Analyse füllt nur Felder, deren Daten sie **klar erkennt**. Ein leeres Feld ist
+KEIN „Klassifizierung fehlgeschlagen", sondern bedeutet nur, dass die Analyse diesen Wert nicht
+sicher aus dem Dokument lesen konnte. Das kann **jedes** Feld treffen (nicht nur `invoiceDueDate`),
+je nach Layout/Qualität des konkreten Dokuments.
 
 → Für `go-fileee`: nach einem Upload nicht sofort `attributes.data` als final annehmen — auf
 `status == CLASSIFIED` (oder mindestens `ANALYSING`, siehe §6.1) pollen/warten, bevor
-Auto-extrahierte Felder ausgewertet werden. `invoiceDueDate` bleibt typischerweise leer und sollte
-nicht als „Klassifizierung fehlgeschlagen" fehlinterpretiert werden.
+auto-extrahierte Felder ausgewertet werden. **Fehlende Einzelfelder sind erwartbar** und dürfen
+nicht als Fehler behandelt werden — die Lib und der Aufrufer müssen mit teil-befüllten
+`attributes.data` robust umgehen (jedes Feld optional).
 
 #### `POST /api/documents/rest/:id/revision-lock` (NEU) — gesetzliche Aufbewahrungssperre
 
