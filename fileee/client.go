@@ -12,15 +12,20 @@ import (
 
 const defaultBaseURL = "https://my.fileee.com"
 
+// defaultStaticBaseURL ist der Static-Host, über den geteilte Dokumente als Voll-PDF ausgeliefert
+// werden (GET /shares/get/:shareId/:documentId/pdf) — ein ANDERER Host als das API-baseURL.
+const defaultStaticBaseURL = "https://static.fileee.com"
+
 type clientConfig struct {
-	httpClient   *http.Client
-	baseURL      string
-	sessionStore SessionStore
-	rps          float64
-	burst        int
-	backoff      BackoffPolicy
-	logger       *slog.Logger
-	userAgent    string
+	httpClient    *http.Client
+	baseURL       string
+	staticBaseURL string
+	sessionStore  SessionStore
+	rps           float64
+	burst         int
+	backoff       BackoffPolicy
+	logger        *slog.Logger
+	userAgent     string
 }
 
 // Option konfiguriert einen Client bei New.
@@ -32,6 +37,10 @@ func WithHTTPClient(hc *http.Client) Option { return func(c *clientConfig) { c.h
 
 // WithBaseURL überschreibt die Basis-URL (Default: https://my.fileee.com), etwa für Tests.
 func WithBaseURL(url string) Option { return func(c *clientConfig) { c.baseURL = url } }
+
+// WithStaticBaseURL überschreibt den Static-Host (Default: https://static.fileee.com), über den der
+// ShareClient geteilte Voll-PDFs lädt. Nur für den ShareClient relevant, v. a. für Tests.
+func WithStaticBaseURL(url string) Option { return func(c *clientConfig) { c.staticBaseURL = url } }
 
 // WithSessionStore setzt den Persistenz-Store für den Session-Cookie-Jar (Default: Datei im
 // Nutzerprofil).

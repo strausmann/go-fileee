@@ -100,7 +100,7 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 | Dokumente | `Documents.Query` / `Diff` / `Get` / `Update` / `Upload`, `Search` (Volltext), `DownloadPDF`, `DownloadPageImage` |
 | Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt), `WaitForProcess` (pollt bis terminal) |
 | Teilen | `Documents.Share` (Freigabe-Link) / `Unshare` |
-| Share-Link nutzen (anonym) | `NewShareClient` → `Resolve(token)` / `DownloadPageImage` (ohne Login, z. B. für N8N-Webhook-Flows); `ShareTokenFromLink` |
+| Share-Link nutzen (anonym) | `NewShareClient` → `Resolve(token)` (typisierte `SharedDocument` mit `PageIDs`), `DownloadPageImage` (Seitenbild), `DownloadSharedPage` (Seiten-OCR), `DownloadSharedPDF` (Voll-PDF vom Static-Host) — ohne Login, für N8N-Webhook-Flows; `ShareTokenFromLink` |
 | Dokumenttyp-Felder | `DocumentTypeSchemes` (`Query`/`Diff`/`Get`, `Fields()` je Typ) |
 | Fehler-Erkennung | `errors.Is(err, ErrRateLimited \| ErrUnsupportedFileType \| ErrNotFound \| ErrDuplicateDocument)`, `BlockedError` (secondsBlocked) |
 | FileeeBoxen | `Boxes.List` / `Get` / `AddDocument` / `RemoveDocument` |
@@ -121,7 +121,7 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 | Funktion | API |
 |---|---|
 | Teilen an einen Kontakt (Konversation) | Konversationen (`documents/rest/share` = Link-Freigabe ist abgedeckt) |
-| Anonymer Voll-PDF-Download eines Share-Links | Endpunkt noch nicht verifiziert (Seitenbild via `ShareClient.DownloadPageImage` ist abgedeckt) |
+| Getippte OCR-Verarbeitung (`[]OCRToken`) + authentifizierter `/api/pages/:id` (eigenes Login) | OCR-Rohdaten via `DownloadSharedPage` abgedeckt; getippte Struktur + authentifizierte Variante geplant |
 | „Alle Dateien" ZIP-Datei abholen | Export-Start + Warten bis fertig (`WaitForProcess`) abgedeckt; der finale ZIP-**Byte-Download** noch offen — der Feldname der Download-URL im fertigen `DownloadAllProcess` ist noch nicht verifiziert (finaler Prozess-Snapshot fehlt), wird daher bewusst nicht geraten |
 | Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
 | Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
