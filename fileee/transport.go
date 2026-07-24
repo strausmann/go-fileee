@@ -63,29 +63,37 @@ func (t *rateLimitedTransport) sleepFn() func(time.Duration) {
 	return time.Sleep
 }
 
-// drainBody liest den Request-Body EINMALIG vollständig ein, da http.Request.Body ein
-// Einweg-Reader ist — Retries/die Reauth-Wiederholung brauchen denselben Body erneut.
-func drainBody(req *http.Request) ([]byte, error) {
+// bodyProvider liefert eine Funktion, die den Request-Body für jeden Versuch (Retry/Reauth) frisch
+// erzeugt. Setzt der Aufrufer req.GetBody (net/http tut das automatisch für bytes/strings-Bodies),
+// wird dieser genutzt und der Body NICHT in den RAM gepuffert — wichtig für große Uploads. Nur wenn
+// GetBody fehlt (nicht reproduzierbarer Stream), wird der Body einmalig gepuffert. Ohne Body: nil.
+func bodyProvider(req *http.Request) (func() (io.ReadCloser, error), error) {
 	if req.Body == nil {
 		return nil, nil
+	}
+	if req.GetBody != nil {
+		req.Body.Close()
+		return req.GetBody, nil
 	}
 	b, err := io.ReadAll(req.Body)
 	req.Body.Close()
 	if err != nil {
 		return nil, err
 	}
-	return b, nil
+	return func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }, nil
 }
 
-// cloneRequestWithBody klont den Request für einen einzelnen Versuch und hängt den zuvor
-// gepufferten Body als frischen Reader ein.
-func cloneRequestWithBody(req *http.Request, body []byte) *http.Request {
+// cloneRequest klont den Request für einen einzelnen Versuch und hängt einen frischen Body ein.
+func cloneRequest(req *http.Request, getBody func() (io.ReadCloser, error)) (*http.Request, error) {
 	clone := req.Clone(req.Context())
-	if body != nil {
-		clone.Body = io.NopCloser(bytes.NewReader(body))
-		clone.ContentLength = int64(len(body))
+	if getBody != nil {
+		body, err := getBody()
+		if err != nil {
+			return nil, err
+		}
+		clone.Body = body
 	}
-	return clone
+	return clone, nil
 }
 
 // injectXSRF setzt den x-xsrf-token-Header aus dem Cookie-Jar — nur bei mutierenden Methoden
@@ -124,7 +132,7 @@ func (t *rateLimitedTransport) setUserAgent(req *http.Request) {
 // mutex-geschützt + stampede-sicher über reauthEpoch) und Backoff bei 429/5xx/Netzwerkfehlern
 // (Umbrella-Spec §4.5/§7).
 func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	bodyBytes, err := drainBody(req)
+	getBody, err := bodyProvider(req)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +151,10 @@ func (t *rateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 		// Selbst-Deadlock, sobald Reauth über den Transport läuft.
 		epochAtAttempt := t.reauthEpoch.Load()
 
-		cloned := cloneRequestWithBody(req, bodyBytes)
+		cloned, err := cloneRequest(req, getBody)
+		if err != nil {
+			return nil, err
+		}
 		t.injectXSRF(cloned)
 		t.setUserAgent(cloned)
 

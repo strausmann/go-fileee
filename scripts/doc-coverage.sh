@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 exempt='^(MarshalJSON|UnmarshalJSON|String|Error)$'
-fail=0
+gaps="$(mktemp)"
+trap 'rm -f "$gaps"' EXIT
 while IFS= read -r file; do
   awk -v F="$file" -v EXEMPT="$exempt" '
     /^\/\// { hascomment=1; next }
@@ -18,7 +19,7 @@ while IFS= read -r file; do
     /^(const|var) [A-Z]/ { if(!hascomment) print F":"NR": "$1" "$2; hascomment=0; next }
     { hascomment=0 }
   ' "$file"
-done < <(find fileee -name '*.go' ! -name '*_test.go') | sort | tee /tmp/doc-gaps.txt
-n=$(wc -l < /tmp/doc-gaps.txt | tr -d ' ')
+done < <(find fileee -name '*.go' ! -name '*_test.go') | sort | tee "$gaps"
+n=$(wc -l < "$gaps" | tr -d ' ')
 echo "Undokumentierte exportierte Symbole: $n"
 [ "$n" -eq 0 ] || exit 1

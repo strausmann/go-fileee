@@ -73,9 +73,24 @@ func (f *FileSessionStore) Save(ctx context.Context, s *Session) error {
 	if err != nil {
 		return fmt.Errorf("fileee: session encode: %w", err)
 	}
-	tmp := f.Path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// Eindeutige Temp-Datei im Zielverzeichnis, damit parallele Save-Läufe sich nicht überschreiben;
+	// atomarer Rename auf den Zielpfad.
+	tmpf, err := os.CreateTemp(filepath.Dir(f.Path), ".session-*.tmp")
+	if err != nil {
+		return fmt.Errorf("fileee: session tmp create: %w", err)
+	}
+	tmp := tmpf.Name()
+	defer os.Remove(tmp) // no-op nach erfolgreichem Rename
+	if err := tmpf.Chmod(0o600); err != nil {
+		tmpf.Close()
+		return fmt.Errorf("fileee: session tmp chmod: %w", err)
+	}
+	if _, err := tmpf.Write(data); err != nil {
+		tmpf.Close()
 		return fmt.Errorf("fileee: session tmp write: %w", err)
+	}
+	if err := tmpf.Close(); err != nil {
+		return fmt.Errorf("fileee: session tmp close: %w", err)
 	}
 	if err := os.Rename(tmp, f.Path); err != nil {
 		return fmt.Errorf("fileee: session rename: %w", err)
