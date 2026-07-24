@@ -34,22 +34,25 @@ func NewServer(cfg Config, fc *fileee.Client, log *slog.Logger) *Server {
 
 // Handler baut den vollständigen HTTP-Handler von fileee-server: einen http.ServeMux mit
 // registrierter Huma-API (OpenAPI 3.1 unter /openapi.json und /openapi.yaml, Docs-UI unter
-// /docs — siehe newAPI in api.go) sowie einer eigenen /healthz-Liveness-Route, umschlossen von
-// der Middleware-Kette AccessLog → APITokenAuth. Diese Reihenfolge ist bewusst: AccessLog liegt
-// AUSSERHALB von APITokenAuth, damit auch von der Auth-Middleware abgelehnte Requests (401) im
-// NGINX-Access-Log landen — CrowdSecs http-bruteforce-Szenario wertet genau diese Zeilen aus
-// (siehe accesslog.go-Doku). Das Access-Log schreibt nach os.Stdout, getrennt vom
-// App-/Audit-Log (slog, s.log) auf stderr — Spec §"Doku-Stand" (Review-Auflösung,
+// /docs — siehe newAPI in api.go) samt Domänen-Operationen (Task 7: Dokumente/Seiten/OCR und
+// Stammdaten, siehe registerDocumentRoutes/registerEntityRoutes) sowie einer eigenen
+// /healthz-Liveness-Route, umschlossen von der Middleware-Kette AccessLog → APITokenAuth. Diese
+// Reihenfolge ist bewusst: AccessLog liegt AUSSERHALB von APITokenAuth, damit auch von der
+// Auth-Middleware abgelehnte Requests (401) im NGINX-Access-Log landen — CrowdSecs
+// http-bruteforce-Szenario wertet genau diese Zeilen aus (siehe accesslog.go-Doku). Das
+// Access-Log schreibt nach os.Stdout, getrennt vom App-/Audit-Log (slog, s.log) auf stderr —
+// Spec §"Doku-Stand" (Review-Auflösung,
 // docs/superpowers/specs/2026-07-24-fileee-server-design.md im homelab-management-Repo).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 
-	// newAPI registriert die Huma-Standardrouten (OpenAPI/Docs) auf mux. Der zurückgegebene
-	// huma.API-Wert wird in Task 6 noch nicht gebraucht (keine Domänen-Operationen), spätere
-	// Tasks (Router-Registrierung, siehe Modulstruktur „router.go" in der Design-Spec) reichen
-	// ihn dann durch — deshalb bewusst kein Domänen-Wiring hier.
-	newAPI(mux)
+	// newAPI registriert die Huma-Standardrouten (OpenAPI/Docs) auf mux und liefert die huma.API,
+	// über die Task 7 (und Folge-Tasks) ihre Domänen-Operationen registrieren — daher wird der
+	// Rückgabewert hier (anders als noch in Task 6) tatsächlich gebraucht und weitergereicht.
+	api := newAPI(mux)
+	s.registerDocumentRoutes(api)
+	s.registerEntityRoutes(api)
 
 	inner := APITokenAuth(s.cfg.APIToken, isAuthExempt(s.cfg), http.Handler(mux))
 	return AccessLog(os.Stdout, s.cfg.TrustedProxies, s.cfg.ClientIPHeaders, inner)
