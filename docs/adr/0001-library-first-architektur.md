@@ -1,10 +1,21 @@
 # ADR-0001: Library-first-Architektur
 
-**Status:** accepted
+**Status:** superseded
 **Datum:** 2026-07-23
 **Ersetzt:** —
-**Ersetzt durch:** —
+**Ersetzt durch:** Repo-Split (Konzept 2026-07-24)
 **Verwandt:** ADR-0002, ADR-0004, ADR-0006
+
+> **Nachtrag (2026-07-24, Repo-Split):** Mit dem Repo-Split sind Lib (`go-fileee`, dieses Repo) und
+> Server (`fileee-server`, eigenes Repo) getrennte Go-Module geworden. Der Teil dieser Entscheidung,
+> der ein HTTP-Framework „nur im Server-Binary" verlangte (huma bleibt außerhalb der Core-Lib), ist
+> dadurch **gegenstandslos**: Er wird nicht mehr durch Disziplin innerhalb eines gemeinsamen Repos
+> erzwungen, sondern ergibt sich naturgemäß aus der Modul-/Repo-Grenze selbst — huma steht
+> ausschließlich in `fileee-server/go.mod`, die Core-Lib hier importiert es gar nicht mehr. Kontext
+> und Entscheidung unten bleiben unverändertes, historisches Protokoll (sie galten, solange Lib und
+> CLI/MCP-Adapter im selben Repo lebten). Details zum Split:
+> [Konzept 2026-07-24](https://github.com/strausmann/homelab-pangolin-client/blob/main/docs/superpowers/specs/2026-07-24-fileee-repo-split-release-automation-design.md)
+> (`homelab-management`-Repo, Abschnitt „ADR-Verschiebung / Reconciliation").
 
 ## Kontext
 

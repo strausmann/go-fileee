@@ -18,13 +18,18 @@ Neues ADR anlegen: Kopiere [`template.md`](template.md) nach `docs/adr/NNNN-slug
 
 | Nr. | Titel | Status | Datum |
 |-----|-------|--------|-------|
-| [0001](0001-library-first-architektur.md) | Library-first-Architektur | accepted | 2026-07-23 |
+| [0001](0001-library-first-architektur.md) | Library-first-Architektur | superseded | 2026-07-23 |
 | [0002](0002-auth-modell-session-cookie-totp.md) | Auth-Modell: Session-Cookie + headless TOTP | accepted | 2026-07-23 |
 | [0003](0003-reverse-engineered-api-risiko.md) | Reverse-engineered internes API (akzeptiertes Risiko) | accepted | 2026-07-23 |
 | [0004](0004-test-strategie.md) | Test-Strategie | accepted | 2026-07-23 |
 | [0005](0005-schonender-betrieb-rate-limiting.md) | Schonender Betrieb / Rate-Limiting | accepted | 2026-07-23 |
 | [0006](0006-domaenen-neutralitaet.md) | Domänen-Neutralität | accepted | 2026-07-23 |
 | [0007](0007-ausschluss-destruktiver-operationen.md) | Ausschluss destruktiver und riskanter Operationen | accepted | 2026-07-24 |
+
+**Cross-Repo-Hinweis:** ADR-0008 ist **kein** lokales ADR dieses Repos (Nummer wird hier bewusst
+nicht wiederverwendet). Es lebt seit dem Repo-Split im `fileee-server`-Repo:
+[ADR-0008 (fileee-server)](https://github.com/strausmann/fileee-server/blob/main/docs/adr/0008-fileee-server.md)
+— siehe Lineage-Verweis in [ADR-0007](0007-ausschluss-destruktiver-operationen.md).
 
 ## Status-Werte
 
