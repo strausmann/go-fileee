@@ -100,6 +100,9 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 | Dokumente | `Documents.Query` / `Diff` / `Get` / `Update` / `Upload`, `Search` (Volltext), `DownloadPDF`, `DownloadPageImage` |
 | Export | `Documents.ExportZIP` / `ExportAll` (passwortgeschütztes ZIP als Prozess), `Processes.Get` (Fortschritt) |
 | Teilen | `Documents.Share` (Freigabe-Link) / `Unshare` |
+| Share-Link nutzen (anonym) | `NewShareClient` → `Resolve(token)` / `DownloadPageImage` (ohne Login, z. B. für N8N-Webhook-Flows); `ShareTokenFromLink` |
+| Dokumenttyp-Felder | `DocumentTypeSchemes` (`Query`/`Diff`/`Get`, `Fields()` je Typ) |
+| Fehler-Erkennung | `errors.Is(err, ErrRateLimited \| ErrUnsupportedFileType \| ErrNotFound \| ErrDuplicateDocument)`, `BlockedError` (secondsBlocked) |
 | FileeeBoxen | `Boxes.List` / `Get` / `AddDocument` / `RemoveDocument` |
 | Erinnerungen | `Reminders.Query` / `Diff` / `Get` / `Create` |
 | Kontakte | `Contacts.Query` / `Diff` / `Get` / `Create` / `Update` |
@@ -118,6 +121,8 @@ abgedeckte Punkte sind teils bewusst ausgelassen (Risiko), teils schlicht noch n
 | Funktion | API |
 |---|---|
 | Teilen an einen Kontakt (Konversation) | Konversationen (`documents/rest/share` = Link-Freigabe ist abgedeckt) |
+| Anonymer Voll-PDF-Download eines Share-Links | Endpunkt noch nicht verifiziert (Seitenbild via `ShareClient.DownloadPageImage` ist abgedeckt) |
+| „Alle Dateien" ZIP-Datei abholen | Export-Start + Prozess-Polling abgedeckt; die finale ZIP-Download-URL des fertigen Prozesses noch offen |
 | Erneut analysieren | `POST /api/documents/rest/:id/reanalyze` |
 | Papierkorb-Flow | `deleted-documents/list`, `delete-permanently` |
 | Seiten-Operationen | Merge/Split/Rotate/Extract/Reorder |
