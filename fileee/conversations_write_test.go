@@ -250,3 +250,50 @@ func TestConversations_RemoveParticipant_NotFound(t *testing.T) {
 		t.Fatal("erwartet Fehler bei unbekanntem Teilnehmer")
 	}
 }
+
+func TestConversations_PendingInvitations(t *testing.T) {
+	diff := `{"rows":[
+	  {"id":"c1","invitation":true,"title":"Einladung A"},
+	  {"id":"c2","invitation":false,"title":"schon drin"},
+	  {"id":"c3","invitation":true,"title":"Einladung B"}
+	],"totalRows":3,"idsToDelete":[]}`
+	srv := newMockServer(t, convAuthMock(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/conversations/rest/diff" {
+			w.Write([]byte(diff))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	c := convTestClient(t, srv)
+	pend, err := c.Conversations.PendingInvitations(context.Background())
+	if err != nil {
+		t.Fatalf("PendingInvitations: %v", err)
+	}
+	if len(pend) != 2 {
+		t.Fatalf("erwartet 2 offene Einladungen, bekommen %d", len(pend))
+	}
+	for _, p := range pend {
+		if !p.Invitation {
+			t.Errorf("Konversation %s ohne invitation-Flag in der Liste", p.ID)
+		}
+	}
+}
+
+func TestConversations_AcceptInvitation(t *testing.T) {
+	var hit bool
+	srv := newMockServer(t, convAuthMock(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/conversations/invitations/c1/accept" && r.Method == http.MethodPost {
+			hit = true
+			w.Write([]byte(`{}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	c := convTestClient(t, srv)
+	if err := c.Conversations.AcceptInvitation(context.Background(), "c1"); err != nil {
+		t.Fatalf("AcceptInvitation: %v", err)
+	}
+	if !hit {
+		t.Error("accept-Endpunkt wurde nicht aufgerufen")
+	}
+}

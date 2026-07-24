@@ -20,6 +20,7 @@ type Conversation struct {
 	FormerParticipants []Participant     `json:"formerParticipants"`
 	Roles              map[string]string `json:"roles"`
 	State              ConversationState `json:"state"`
+	Invitation         bool              `json:"invitation"`
 	Version            int64             `json:"version"`
 	Created            string            `json:"created,omitempty"`
 	Modified           string            `json:"modified,omitempty"`
@@ -106,6 +107,10 @@ type ConversationService interface {
 	AddParticipant(ctx context.Context, conversationID, email, role string) error
 	// RemoveParticipant entfernt einen Teilnehmer (per ID) aus der Konversation.
 	RemoveParticipant(ctx context.Context, conversationID, participantID string) error
+	// PendingInvitations liefert die Konversationen mit einer offenen Einladung an das eigene Konto.
+	PendingInvitations(ctx context.Context) ([]Conversation, error)
+	// AcceptInvitation nimmt die Einladung zu einer Konversation an.
+	AcceptInvitation(ctx context.Context, conversationID string) error
 }
 
 // Konversations-Rollen für AddParticipant.
@@ -401,6 +406,43 @@ func (s *conversationService) RemoveParticipant(ctx context.Context, conversatio
 		ConversationPermissions: found.ConversationPermissions, Attributes: attrs,
 	}}}
 	return s.postParticipants(ctx, conversationID, "remove", body)
+}
+
+// PendingInvitations liefert die Konversationen, zu denen eine offene Einladung an das eigene Konto
+// vorliegt (Konversationsfeld invitation=true).
+func (s *conversationService) PendingInvitations(ctx context.Context) ([]Conversation, error) {
+	res, err := s.Diff(ctx, NewCursor("Conversation"))
+	if err != nil {
+		return nil, err
+	}
+	var out []Conversation
+	for _, conv := range res.Rows {
+		if conv.Invitation {
+			out = append(out, conv)
+		}
+	}
+	return out, nil
+}
+
+// AcceptInvitation nimmt die Einladung zu einer Konversation an
+// (POST /api/conversations/invitations/:id/accept).
+func (s *conversationService) AcceptInvitation(ctx context.Context, conversationID string) error {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return err
+	}
+	resp, err := s.client.postJSON(ctx, "/api/conversations/invitations/"+conversationID+"/accept", []byte("{}"))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("fileee: accept invitation read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return parseAPIError(resp.StatusCode, body)
+	}
+	return nil
 }
 
 // postParticipants sendet einen participants/add- bzw. -remove-Request und prüft den Status.
