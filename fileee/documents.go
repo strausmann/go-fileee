@@ -67,6 +67,15 @@ func (s *DocumentService) Update(ctx context.Context, doc *Document) (*Document,
 	return &updated, nil
 }
 
+// Delete löscht ein Dokument unwiderruflich (Hard-DELETE, DELETE /api/documents/rest/:id) — es
+// gibt serverseitig keinen Papierkorb/Undo für diese Operation. Die Lib bietet Delete bewusst als
+// geguardete Opt-in-Methode an (ADR-0007/ADR-0008); der fileee-server registriert die zugehörige
+// HTTP-Route nur, wenn beim Start FILEEE_ALLOW_DESTRUCTIVE gesetzt ist. Ein fehlendes Dokument
+// liefert ErrNotFound (per errors.Is prüfbar), jeder andere Fehlerstatus ein *APIError.
+func (s *DocumentService) Delete(ctx context.Context, id string) error {
+	return s.inner.delete(ctx, id)
+}
+
 // UploadMetadata steuert Document.Upload (API.md §4.1).
 type UploadMetadata struct {
 	Title    string

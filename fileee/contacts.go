@@ -122,3 +122,12 @@ func (s *contactService) Update(ctx context.Context, entity *Contact) (*Contact,
 	}
 	return &updated, nil
 }
+
+// Delete löscht einen Kontakt unwiderruflich (Hard-DELETE, DELETE /api/contacts/rest/:id) — es
+// gibt serverseitig keinen Papierkorb/Undo für diese Operation. Die Lib bietet Delete bewusst als
+// geguardete Opt-in-Methode an (ADR-0007/ADR-0008); der fileee-server registriert die zugehörige
+// HTTP-Route nur, wenn beim Start FILEEE_ALLOW_DESTRUCTIVE gesetzt ist. Ein fehlender Kontakt
+// liefert ErrNotFound (per errors.Is prüfbar), jeder andere Fehlerstatus ein *APIError.
+func (s *contactService) Delete(ctx context.Context, id string) error {
+	return s.restService.delete(ctx, id)
+}

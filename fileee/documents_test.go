@@ -392,6 +392,63 @@ func TestDocumentServiceDownloadPageImage(t *testing.T) {
 // newMockUploadServer baut einen httptest.Server, der für EnsureSession-Routen normal antwortet
 // und für POST /api/documents/rest den custom handler nutzt (Multipart lässt sich nicht über
 // die einfache mockRoute-Tabelle abbilden, da der Body dynamisch/binär ist).
+// TestDocumentServiceDeleteHappyErrorNetwork deckt Delete() als Mutation-Funktion vollständig ab
+// (Test-Coverage-Pflicht): Happy-Path (200 -> nil), Error-Path (404 -> ErrNotFound per errors.Is)
+// und Network-Error (unerreichbarer Host -> kein *APIError, sondern Transport-Fehler). Delete ist
+// ein Hard-DELETE — ADR-0007/ADR-0008 dokumentieren, warum die Lib diese Methode trotzdem bewusst
+// (geguardet) anbietet.
+func TestDocumentServiceDeleteHappyErrorNetwork(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"DELETE /api/documents/rest/doc-1": {Status: 200},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		if err := client.Documents.Delete(context.Background(), "doc-1"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("happy path 204", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"DELETE /api/documents/rest/doc-1": {Status: 204},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		if err := client.Documents.Delete(context.Background(), "doc-1"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("error path 404 -> ErrNotFound", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"DELETE /api/documents/rest/unbekannt": {Status: 404, Body: []byte(`{"errorCode":"NOT_FOUND"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		err := client.Documents.Delete(context.Background(), "unbekannt")
+		if !errorsIsNotFound(err) {
+			t.Fatalf("erwartet ErrNotFound, bekommen %v", err)
+		}
+	})
+
+	t.Run("network error", func(t *testing.T) {
+		client, err := New(
+			Credentials{Username: "test@example.invalid", Password: "test-pw"},
+			WithBaseURL("http://127.0.0.1:1"),
+			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+		)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		err = client.Documents.Delete(context.Background(), "doc-1")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
+		}
+	})
+}
+
 func newMockUploadServer(t *testing.T, authRoutes map[string]mockRoute, uploadHandler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	base := jsonHandler(t, authRoutes)

@@ -91,11 +91,14 @@ func (s *boxService) RemoveDocument(ctx context.Context, boxID, documentID strin
 	return closeAndCheck(resp)
 }
 
-// closeAndCheck schließt den Response-Body und übersetzt einen Nicht-200-Status in einen *APIError.
+// closeAndCheck schließt den Response-Body und übersetzt einen Status außerhalb von 200/204 in
+// einen *APIError (204 zusätzlich zu 200 als Erfolg, seit Task 15s Delete-Methoden — ein
+// leerer No-Content-DELETE-Response ist die REST-übliche Erfolgsantwort, API.md dokumentiert für
+// die reverse-engineerte Fileee-API keinen festen Statuscode je Endpunkt).
 func closeAndCheck(resp *http.Response) error {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return parseAPIError(resp.StatusCode, body)
 	}
 	return nil

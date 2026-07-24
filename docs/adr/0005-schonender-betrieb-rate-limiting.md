@@ -4,7 +4,7 @@
 **Datum:** 2026-07-23
 **Ersetzt:** —
 **Ersetzt durch:** —
-**Verwandt:** ADR-0003, ADR-0004
+**Verwandt:** ADR-0003, ADR-0004, ADR-0008
 
 ## Kontext
 

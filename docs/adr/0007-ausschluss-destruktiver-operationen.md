@@ -4,7 +4,19 @@
 **Datum:** 2026-07-24
 **Ersetzt:** —
 **Ersetzt durch:** —
-**Verwandt:** ADR-0003 (Reverse-engineered internes API — akzeptiertes Risiko)
+**Verwandt:** ADR-0003 (Reverse-engineered internes API — akzeptiertes Risiko), ADR-0008
+(fileee-server — verfeinert diesen Ausschluss, siehe Hinweis unten)
+
+> **Nachtrag (2026-07-24, im Rahmen von ADR-0008):** Der Ausschluss von Hartem-Löschen unten wurde
+> durch ADR-0008 **verfeinert, nicht aufgehoben**: Die Library bietet inzwischen bewusst
+> **geguardete** Opt-in-Methoden `Documents.Delete`, `Contacts.Delete` und `Reminders.Delete` an
+> (der Aufrufer muss sie aktiv nutzen, kein impliziter Zugriff); `fileee-server` registriert die
+> zugehörigen HTTP-Routen zusätzlich nur bei `FILEEE_ALLOW_DESTRUCTIVE=true`, sonst existieren sie
+> serverseitig gar nicht. **`revision-lock` bleibt vollständig ausgeschlossen** — das darunter
+> beschriebene Risiko (Dokument wird serverseitig unserialisierbar) ist von dieser Verfeinerung
+> nicht betroffen und gilt unverändert. Status bleibt `accepted`, da die ursprüngliche
+> Risikoabwägung weiterhin zutrifft; Kontext und Entscheidung unten sind unverändertes,
+> historisches Protokoll. Details: [ADR-0008](0008-fileee-server.md).
 
 ## Kontext
 

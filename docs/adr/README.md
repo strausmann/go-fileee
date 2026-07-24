@@ -25,6 +25,7 @@ Neues ADR anlegen: Kopiere [`template.md`](template.md) nach `docs/adr/NNNN-slug
 | [0005](0005-schonender-betrieb-rate-limiting.md) | Schonender Betrieb / Rate-Limiting | accepted | 2026-07-23 |
 | [0006](0006-domaenen-neutralitaet.md) | Domänen-Neutralität | accepted | 2026-07-23 |
 | [0007](0007-ausschluss-destruktiver-operationen.md) | Ausschluss destruktiver und riskanter Operationen | accepted | 2026-07-24 |
+| [0008](0008-fileee-server.md) | fileee-server — REST-API-Service (Single-Tenant, geguardetes Löschen) | proposed | 2026-07-24 |
 
 ## Status-Werte
 

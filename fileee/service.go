@@ -16,11 +16,15 @@ type ReadService[T any] interface {
 	Get(ctx context.Context, id string) (*T, error)
 }
 
-// WriteService erweitert ReadService um Create/Update (aktuell nur Contacts, Umbrella-Spec §3.3).
+// WriteService erweitert ReadService um Create/Update/Delete (aktuell nur Contacts, Umbrella-Spec
+// §3.3). Delete ist ein unwiderruflicher Hard-DELETE — bewusst geguardet angeboten
+// (ADR-0007/ADR-0008), nicht automatisch server-seitig freigeschaltet.
 type WriteService[T any] interface {
 	ReadService[T]
 	Create(ctx context.Context, entity *T) (*T, error)
 	Update(ctx context.Context, entity *T) (*T, error)
+	// Delete löscht die Entität unwiderruflich anhand ihrer ID (kein serverseitiger Papierkorb).
+	Delete(ctx context.Context, id string) error
 }
 
 // restService implementiert das generische Query/Diff/Get-Muster (API.md §1/§3), das alle
@@ -172,6 +176,24 @@ func (s *restService[T]) Get(ctx context.Context, id string) (*T, error) {
 		return nil, fmt.Errorf("fileee: get response decode: %w", err)
 	}
 	return &row, nil
+}
+
+// delete führt den generischen Hard-DELETE-Request aus (DELETE /api/<resourcePath>/rest/:id,
+// analog zum bereits vorhandenen boxService.RemoveDocument-Muster). NICHT exportiert — jede
+// Ressource entscheidet über eine eigene, dokumentierte Delete-Methode, ob und wie sie diese
+// unwiderrufliche Operation öffentlich anbietet (ADR-0007/ADR-0008: destruktive Lib-Methoden sind
+// bewusst geguardet, der fileee-server registriert die zugehörige Route nur bei
+// FILEEE_ALLOW_DESTRUCTIVE=true). 404 wird per closeAndCheck/parseAPIError als *APIError geliefert,
+// das über errors.Is(err, ErrNotFound) prüfbar ist.
+func (s *restService[T]) delete(ctx context.Context, id string) error {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return err
+	}
+	resp, err := s.client.deleteReq(ctx, "/api/"+s.resourcePath+"/rest/"+id)
+	if err != nil {
+		return err
+	}
+	return closeAndCheck(resp)
 }
 
 // queryAllPages blaettert Query() vollstaendig durch (Start/Limit) — genutzt vom
