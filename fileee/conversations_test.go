@@ -8,10 +8,10 @@ import (
 
 const convGetBody = `{"id":"c1","title":"Shared: Rechnung","conversationType":"DOCUMENT_SHARE","kind":"SHARE",
   "participants":[
-    {"id":"p1","name":"Owner","type":"USER","invited":"2026-07-24T10:00:00Z","joined":"2026-07-24T10:00:00Z"},
-    {"id":"p2","name":"Empfaenger","type":"CONTACT","invited":"2026-07-24T11:00:00Z","joined":""}
+    {"id":"p1","name":"Owner","type":"USER","invited":false,"joined":true},
+    {"id":"p2","name":"Empfaenger","type":"EXTERNAL","externalId":"x@example.invalid","invited":true,"joined":false}
   ],
-  "formerParticipants":[{"id":"p3","name":"Weg","type":"CONTACT","invited":"2026-07-20T10:00:00Z","joined":""}],
+  "formerParticipants":[{"id":"p3","name":"Weg","type":"USER","invited":true,"joined":false}],
   "roles":{"u1":"OWNER"},
   "state":{"read":true,"role":"OWNER","dateOfLastMessage":"2026-07-24T12:00:00Z","sharedDocumentIds":["d1"]},
   "version":3}`

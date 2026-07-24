@@ -28,19 +28,24 @@ type Conversation struct {
 	Messages []json.RawMessage `json:"messages,omitempty"`
 }
 
-// Participant ist ein Teilnehmer einer Konversation. Invited = Zeitpunkt der Einladung, Joined =
-// Zeitpunkt der Annahme. Ist Joined leer, hat der Teilnehmer die Freigabe noch nicht angenommen.
+// Participant ist ein Teilnehmer einer Konversation. Invited/Joined sind Booleans (LIVE verifiziert
+// 2026-07-24): Invited = eingeladen, Joined = beigetreten/angenommen. Type ist USER (Fileee-Nutzer)
+// oder EXTERNAL (per E-Mail eingeladen); bei EXTERNAL trägt ExternalID die E-Mail.
 type Participant struct {
-	ID                      string          `json:"id"`
-	Name                    string          `json:"name"`
-	Type                    string          `json:"type"`
-	Invited                 string          `json:"invited"`
-	Joined                  string          `json:"joined"`
-	ConversationPermissions json.RawMessage `json:"conversationPermissions,omitempty"`
+	ID                      string         `json:"id"`
+	Name                    string         `json:"name"`
+	Type                    string         `json:"type"`
+	Invited                 bool           `json:"invited"`
+	Joined                  bool           `json:"joined"`
+	ExternalID              string         `json:"externalId,omitempty"`
+	PhoneNumber             string         `json:"phoneNumber,omitempty"`
+	ConversationPermissions []string       `json:"conversationPermissions,omitempty"`
+	Attributes              map[string]any `json:"attributes,omitempty"`
 }
 
-// Accepted meldet, ob der Teilnehmer die Freigabe angenommen hat (Joined gesetzt).
-func (p Participant) Accepted() bool { return p.Joined != "" }
+// Accepted meldet, ob der Teilnehmer die Freigabe angenommen hat (Joined true). Ein Teilnehmer mit
+// Invited=true und Joined=false ist eingeladen, hat aber noch nicht angenommen.
+func (p Participant) Accepted() bool { return p.Joined }
 
 // ConversationState hält den nutzerspezifischen Zustand der Konversation: gelesen-Status, eigene
 // Rolle und die IDs der in dieser Konversation geteilten Dokumente.
@@ -59,6 +64,10 @@ type ConversationService interface {
 	ReadService[Conversation]
 	// SendMessage postet eine Text-Chatnachricht in die Konversation.
 	SendMessage(ctx context.Context, conversationID, text string) (*SentMessage, error)
+	// ShareDocument teilt ein bestehendes Fileee-Dokument in die Konversation.
+	ShareDocument(ctx context.Context, conversationID, documentID string) (*SentMessage, error)
+	// UnshareDocument entfernt ein geteiltes Dokument wieder aus der Konversation.
+	UnshareDocument(ctx context.Context, conversationID, documentID string) (*SentMessage, error)
 }
 
 // SentMessage ist die Server-Antwort auf eine gesendete Nachricht.
@@ -154,6 +163,107 @@ func (s *conversationService) SendMessage(ctx context.Context, conversationID, t
 	var out SentMessage
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return nil, fmt.Errorf("fileee: send message decode: %w", err)
+	}
+	return &out, nil
+}
+
+// documentMessageWire ist eine DOCUMENT-Nachricht: teilt (remove=false) bzw. entfernt (remove=true)
+// ein bestehendes Fileee-Dokument in/aus einer Konversation. Feldstruktur aus Live-Traffic belegt.
+type documentMessageWire struct {
+	ID                  string         `json:"id"`
+	Direction           string         `json:"direction"`
+	Timestamp           string         `json:"timestamp"`
+	Message             *string        `json:"message"`
+	Important           bool           `json:"important"`
+	I18nDictionary      map[string]any `json:"i18nDictionary"`
+	SenderName          *string        `json:"senderName"`
+	SourceModule        *string        `json:"sourceModule"`
+	Processed           bool           `json:"processed"`
+	SenderID            string         `json:"senderId"`
+	OnlyVisibleFor      *string        `json:"onlyVisibleFor"`
+	Type                string         `json:"type"`
+	Attributes          *string        `json:"attributes"`
+	Channel             *string        `json:"channel"`
+	Attachments         []any          `json:"attachments"`
+	DocumentID          string         `json:"documentId"`
+	DocumentType        *string        `json:"documentType"`
+	Identifier          *string        `json:"identifier"`
+	SubIdentifier       *string        `json:"subIdentifier"`
+	Remove              bool           `json:"remove"`
+	Status              *string        `json:"status"`
+	DontShare           bool           `json:"dontShare"`
+	UnsharedIdentifiers []string       `json:"unsharedIdentifiers"`
+	ShareIndex          *int           `json:"shareIndex"`
+	ShareTotal          *int           `json:"shareTotal"`
+	Uploaded            *bool          `json:"uploaded"`
+}
+
+type sendDocumentWire struct {
+	Message    documentMessageWire `json:"message"`
+	LocalState struct {
+		LastMessageID string `json:"lastMessageId"`
+	} `json:"localState"`
+}
+
+// ShareDocument teilt ein bereits in Fileee existierendes Dokument in die Konversation (DOCUMENT-
+// Nachricht, remove=false).
+func (s *conversationService) ShareDocument(ctx context.Context, conversationID, documentID string) (*SentMessage, error) {
+	return s.docMessage(ctx, conversationID, documentID, false)
+}
+
+// UnshareDocument entfernt ein zuvor geteiltes Dokument wieder aus der Konversation (DOCUMENT-
+// Nachricht, remove=true).
+func (s *conversationService) UnshareDocument(ctx context.Context, conversationID, documentID string) (*SentMessage, error) {
+	return s.docMessage(ctx, conversationID, documentID, true)
+}
+
+func (s *conversationService) docMessage(ctx context.Context, conversationID, documentID string, remove bool) (*SentMessage, error) {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return nil, err
+	}
+	senderID, err := s.client.UserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conv, err := s.Get(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	id, err := newObjectID()
+	if err != nil {
+		return nil, err
+	}
+	body := sendDocumentWire{Message: documentMessageWire{
+		ID:             id,
+		Direction:      "FROM_USER",
+		Timestamp:      s.client.auth.nowFn().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+		I18nDictionary: map[string]any{},
+		SenderID:       senderID,
+		Type:           "DOCUMENT",
+		Attachments:    []any{},
+		DocumentID:     documentID,
+		Remove:         remove,
+	}}
+	body.LocalState.LastMessageID = lastMessageID(conv)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: doc message encode: %w", err)
+	}
+	resp, err := s.client.postJSON(ctx, "/api/conversations/rest/"+conversationID+"/message", raw)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: doc message read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseAPIError(resp.StatusCode, respBody)
+	}
+	var out SentMessage
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return nil, fmt.Errorf("fileee: doc message decode: %w", err)
 	}
 	return &out, nil
 }
