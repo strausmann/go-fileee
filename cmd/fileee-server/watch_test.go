@@ -40,6 +40,30 @@ const watchDiffPoll2 = `{"rows":[
   ],"state":{"sharedDocumentIds":["d1"]}}
 ],"totalRows":1,"idsToDelete":[]}`
 
+// watchMixedBatchPoll1 ist der Baseline-Poll für TestStartWatch_MixedBatchFiresOnlyForGenuineReply:
+// dieselbe Backlog-Situation wie watchDiffPoll1 (eine bereits vorhandene CHAT/TO_USER-Antwort m1,
+// die als Baseline gilt und daher nicht feuern darf).
+const watchMixedBatchPoll1 = `{"rows":[
+  {"id":"c1","version":1,"messages":[
+    {"id":"m1","direction":"TO_USER","timestamp":"2026-07-24T10:00:00Z","message":"alte Antwort","type":"CHAT","senderId":"u1","senderName":"Alice"}
+  ],"state":{"sharedDocumentIds":["d1"]}}
+],"totalRows":1,"idsToDelete":[]}`
+
+// watchMixedBatchPoll2 liefert nach der Baseline (m1) einen gemischten Batch NEUER Nachrichten:
+// m2 (CHAT, aber FROM_USER — die eigene ausgehende Nachricht, IsReply()==false wegen Direction),
+// m3 (Type DOCUMENT, IsReply()==false wegen Type), m4 (Type PARTICIPANT_STATE, IsReply()==false
+// wegen Type) und GENAU EINE echte neue eingehende Antwort m5 (CHAT + TO_USER). Nur m5 darf einen
+// Webhook auslösen — m2..m4 sind zwar "neu" (nach dem Baseline-Marker m1), aber keine Replies.
+const watchMixedBatchPoll2 = `{"rows":[
+  {"id":"c1","version":2,"messages":[
+    {"id":"m1","direction":"TO_USER","timestamp":"2026-07-24T10:00:00Z","message":"alte Antwort","type":"CHAT","senderId":"u1","senderName":"Alice"},
+    {"id":"m2","direction":"FROM_USER","timestamp":"2026-07-24T10:01:00Z","message":"eigene Antwort","type":"CHAT","senderId":"me","senderName":"Ich"},
+    {"id":"m3","direction":"TO_USER","timestamp":"2026-07-24T10:02:00Z","type":"DOCUMENT","senderId":"u1","senderName":"Alice","documentId":"d2"},
+    {"id":"m4","direction":"TO_USER","timestamp":"2026-07-24T10:03:00Z","type":"PARTICIPANT_STATE","senderId":"u1","senderName":"Alice"},
+    {"id":"m5","direction":"TO_USER","timestamp":"2026-07-24T10:04:00Z","message":"echte neue Antwort","type":"CHAT","senderId":"u1","senderName":"Alice"}
+  ],"state":{"sharedDocumentIds":["d1"]}}
+],"totalRows":1,"idsToDelete":[]}`
+
 // newWatchTestClient baut — analog zu newTestFileeeClient (handlers_test.go) — einen eigenen
 // httptest-Mock-Server samt *fileee.Client (Session vorbefüllt, /api/f/user-session-Kurzschluss),
 // registriert aber für POST /api/conversations/rest/diff einen DYNAMISCHEN Handler statt einer
@@ -163,6 +187,67 @@ func TestStartWatch_FiresOnlyOnNewReply(t *testing.T) {
 
 	// Nach stop() darf der Poller nicht mehr weiterlaufen — kein weiterer POST, auch nicht nach
 	// Ablauf mehrerer Ticker-Intervalle.
+	select {
+	case unexpected := <-received:
+		t.Fatalf("Webhook-POST nach stop() empfangen: %s", unexpected)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// TestStartWatch_MixedBatchFiresOnlyForGenuineReply deckt die im Task-13-Review identifizierte
+// Lücke ab: bislang wurde das `if m.IsReply()`-Gate in watchProcessConversation NIE gegen einen
+// Batch getestet, der NEUE Nicht-Reply-Nachrichten NEBEN einer echten neuen Reply enthält — ein
+// Test, der das Gate entfernt oder invertiert (Mutation), wäre damit unbemerkt geblieben. Dieser
+// Test liefert im zweiten Poll vier neue Nachrichten nach dem Baseline-Marker m1 (m2 CHAT/
+// FROM_USER, m3 DOCUMENT, m4 PARTICIPANT_STATE, m5 CHAT/TO_USER) und prüft, dass GENAU EIN
+// Webhook feuert — und zwar für m5, nicht für eine der drei Nicht-Replies.
+func TestStartWatch_MixedBatchFiresOnlyForGenuineReply(t *testing.T) {
+	fc := newWatchTestClient(t, func(n int) []byte {
+		if n == 1 {
+			return []byte(watchMixedBatchPoll1)
+		}
+		return []byte(watchMixedBatchPoll2)
+	})
+	webhookSrv, received := newWatchWebhookServer(t)
+
+	s := &Server{fc: fc, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	stop := s.StartWatch(context.Background(), webhookSrv.URL, 10*time.Millisecond)
+	t.Cleanup(stop)
+
+	var body []byte
+	select {
+	case body = <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout: kein Webhook-POST innerhalb 2s empfangen")
+	}
+
+	var payload watchWebhookPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("Webhook-Body dekodieren: %v (body=%s)", err, body)
+	}
+	if payload.ConversationID != "c1" {
+		t.Errorf("ConversationID = %q, erwartet c1", payload.ConversationID)
+	}
+	if payload.Message.ID != "m5" {
+		t.Errorf("Message.ID = %q, erwartet m5 (einzige echte CHAT+TO_USER-Antwort im Mixed-Batch; m2/m3/m4 sind neu, aber keine Replies)", payload.Message.ID)
+	}
+
+	// Sanity-Check (Mutation-Nachweis): Würde das `if m.IsReply()`-Gate in watchProcessConversation
+	// entfernt oder invertiert, würde fireWatchWebhook für JEDE der vier neuen Nachrichten aufgerufen
+	// (m2, m3, m4, m5) statt nur für m5 — der gepufferte received-Channel (Puffer 4) hätte dann
+	// bereits einen zweiten Body bereitliegen, und der folgende select würde SOFORT einen
+	// unerwarteten zweiten POST liefern statt in den 150ms-Timeout zu laufen. Dieser Test ist damit
+	// nicht-vakuos: er würde bei entferntem/invertiertem Gate zuverlässig fehlschlagen.
+	select {
+	case unexpected := <-received:
+		t.Fatalf("unerwarteter zweiter Webhook-POST — das IsReply()-Gate scheint auch für Nicht-Replies zu feuern: %s", unexpected)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	stop()
+
+	// Nach stop() darf kein weiterer POST mehr eintreffen (analog TestStartWatch_FiresOnlyOnNewReply).
 	select {
 	case unexpected := <-received:
 		t.Fatalf("Webhook-POST nach stop() empfangen: %s", unexpected)
