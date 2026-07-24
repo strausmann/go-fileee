@@ -2,42 +2,33 @@ package fileee
 
 import "context"
 
-// Query-DSL-Konstanten der Volltextsuche (live via HAR verifiziert, siehe Skill fileee
-// troubleshooting „Volltextsuche"). Feldnamen sind DSL-Konstanten `<Entity>Queries|Field:<KONST>`,
-// KEIN Attribut-Pfad wie `attributes.data.title`.
 const (
 	fieldFulltext    = "DocumentQueries:FULLTEXT"
 	fieldDocStatus   = "DocumentField:DOCUMENT_INFORMATION__STATUS"
 	statusEnumPrefix = "PublicDocumentStatus:"
 )
 
-// nonSearchableStatuses sind die Dokument-Status, die die Web-UI bei einer Suche ausschließt
-// (noch nicht fertig verarbeitet / gelöscht / fehlerhaft) — als NEQ-Filter mitgeschickt.
+// nonSearchableStatuses sind die Dokument-Status, die eine Suche ausschließt (unfertig, gelöscht,
+// fehlerhaft).
 var nonSearchableStatuses = []string{"UPLOADING", "DELETED", "ERROR", "NEW"}
 
 // SearchOptions steuert Documents.Search.
 type SearchOptions struct {
-	// Limit begrenzt die Trefferzahl pro Seite (0 = Lib-Default).
 	Limit int
-	// Start ist der Offset für Paginierung.
 	Start int
-	// IncludeAllStatuses deaktiviert die Standard-Status-Ausschlüsse (UPLOADING/DELETED/ERROR/NEW),
-	// falls wirklich über ALLE Dokumente inkl. unfertiger gesucht werden soll.
+	// IncludeAllStatuses sucht auch über unfertige/gelöschte/fehlerhafte Dokumente.
 	IncludeAllStatuses bool
 }
 
-// SearchResult ist das Ergebnis einer Volltextsuche: die Dokument-IDs der Treffer (die Suche läuft
-// mit onlyIds=true, wie die Web-UI) plus die Gesamttrefferzahl.
+// SearchResult enthält die Dokument-IDs der Treffer und deren Gesamtzahl.
 type SearchResult struct {
 	IDs       []string
 	TotalRows int
 }
 
-// Search führt eine Volltextsuche über alle Dokumente aus (FULLTEXT/FUZZY). Die exakte
-// Kriterien-Wire-Form ist live gegen my.fileee.com verifiziert: field `DocumentQueries:FULLTEXT`
-// (type Enum), operator FUZZY, value = Suchbegriff (type String); zusätzlich schließt die Suche —
-// wie die Web-UI — die nicht-durchsuchbaren Status per NEQ aus. Ergebnis sind Dokument-IDs
-// (onlyIds=true); Details je Treffer über Documents.Get.
+// Search führt eine Volltextsuche (FULLTEXT/FUZZY) aus und liefert die IDs der Treffer; Details je
+// Treffer über Documents.Get. Nicht durchsuchbare Status werden ausgeschlossen, sofern nicht
+// SearchOptions.IncludeAllStatuses gesetzt ist.
 func (s *DocumentService) Search(ctx context.Context, term string, opts SearchOptions) (*SearchResult, error) {
 	criteria := make([]Criterion, 0, len(nonSearchableStatuses)+1)
 	if !opts.IncludeAllStatuses {

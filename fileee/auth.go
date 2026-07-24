@@ -315,16 +315,13 @@ func (a *authClient) logout(ctx context.Context) error {
 		return fmt.Errorf("fileee: logout: %w", err)
 	}
 	resp.Body.Close()
-	// POST /api/f/logout widerruft das JSESSIONID-JWT serverseitig (live verifiziert 2026-07-24:
-	// das alte Token liefert danach `authorized:false`). Den In-Memory-Jar zusätzlich leeren, sonst
-	// trägt ein späteres reauthenticate das tote rememberMe-Cookie mit und versucht erst einen
-	// sinnlosen token/login. Store-Reset unabhängig vom Jar-Clear durchführen.
+	// Der Server widerruft das Token; den lokalen Jar mitleeren, damit kein totes rememberMe-Cookie
+	// zurückbleibt.
 	a.clearJar()
 	return a.store.Save(ctx, &Session{})
 }
 
-// clearJar entfernt alle Cookies der Basis-URL aus dem In-Memory-Cookie-Jar (Expiry in der
-// Vergangenheit / MaxAge<0 → net/http/cookiejar löscht sie).
+// clearJar entfernt alle Cookies der Basis-URL aus dem In-Memory-Cookie-Jar.
 func (a *authClient) clearJar() {
 	if a.hc.Jar == nil {
 		return

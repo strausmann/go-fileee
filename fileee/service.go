@@ -71,8 +71,8 @@ type idQueryResult struct {
 	TotalRows int
 }
 
-// queryIDs führt eine Query mit onlyIds=true aus und dekodiert die Zeilen als ID-Strings — bei
-// onlyIds liefert der Server pro Zeile einen String, kein T-Objekt (live belegt, u. a. Volltextsuche).
+// queryIDs führt eine onlyIds-Query aus; der Server liefert dabei pro Zeile eine ID statt eines
+// vollen Objekts.
 func (s *restService[T]) queryIDs(ctx context.Context, opts QueryOptions) (*idQueryResult, error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err

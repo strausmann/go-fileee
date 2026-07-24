@@ -28,20 +28,18 @@ type QueryOptions struct {
 }
 
 // Criterion ist eine typisierte Filterbedingung; Field ist eine EntityField-Konstante
-// (z.B. "DocumentField:DOCUMENT_INFORMATION__ISREAD", API.md §3.3).
+// (z.B. "DocumentField:DOCUMENT_INFORMATION__ISREAD").
 //
-// FieldType/ValueType sind OPTIONALE Overrides für den serializeInformation.type-Diskriminator von
-// field bzw. value. Ohne Override wird für BEIDE der aus dem Go-Wert abgeleitete Typ genutzt
-// (Rückwärtskompatibilität). Sie sind nötig, wenn field- und value-Typ auseinanderfallen — live
-// belegt bei der Volltextsuche: field `DocumentQueries:FULLTEXT` hat type `Enum`, der Suchbegriff
-// (value) type `String` (siehe Skill fileee troubleshooting, „Volltextsuche").
+// FieldType und ValueType überschreiben optional den serializeInformation.type von field bzw.
+// value; ohne Override wird er aus dem Go-Wert abgeleitet. Nötig, wenn beide Typen auseinanderfallen
+// (z.B. Volltextsuche: field "Enum", value "String").
 type Criterion struct {
 	Field     string
 	Operator  Operator
 	Value     any
 	Optional  bool
-	FieldType string // optional; leer = abgeleiteter Typ
-	ValueType string // optional; leer = abgeleiteter Typ
+	FieldType string
+	ValueType string
 }
 
 // SortField steuert die Sortierung (API.md §3.2).
