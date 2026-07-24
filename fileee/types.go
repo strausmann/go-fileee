@@ -136,7 +136,15 @@ type Document struct {
 	Attributes       DocumentAttributes   `json:"-"`
 	UploadAttribute  UploadAttribute      `json:"uploadAttribute"`
 	SharedSpaceIDs   []string             `json:"sharedSpaceIds"`
+	ShareInformation ShareInformation     `json:"shareInformation"`
 	ForbiddenActions []DocumentAction     `json:"forbiddenActions"`
+}
+
+// ShareInformation bündelt die aktiven anonymen Freigaben eines Dokuments. ShareIDs sind die IDs der
+// Share-Links (jede entspricht einem `…/shared/<shareId>`-Link; shareId == share-Token). Für die
+// Kontakt-Freigaben (mit Annahme-Status) siehe die Konversationen (Documents.Conversations).
+type ShareInformation struct {
+	ShareIDs []string `json:"shareIds"`
 }
 
 // documentAttributesEnvelope spiegelt den verschachtelten Wire-Pfad {"attributes":{"data":{...}}}.

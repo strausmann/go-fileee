@@ -83,6 +83,7 @@ type Client struct {
 	Reminders           ReminderService
 	Boxes               BoxService
 	Processes           ProcessService
+	Conversations       ConversationService
 
 	auth       *authClient
 	httpClient *http.Client
@@ -168,6 +169,7 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	c.Reminders = newReminderService(c)
 	c.Boxes = newBoxService(c)
 	c.Processes = newProcessService(c)
+	c.Conversations = newConversationService(c)
 
 	if sess, err := store.Load(context.Background()); err == nil && sess != nil {
 		loadCookiesIntoJar(jar, cfg.baseURL, sess.Cookies)
