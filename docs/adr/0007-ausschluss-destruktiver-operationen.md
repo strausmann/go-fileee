@@ -4,7 +4,22 @@
 **Datum:** 2026-07-24
 **Ersetzt:** —
 **Ersetzt durch:** —
-**Verwandt:** ADR-0003 (Reverse-engineered internes API — akzeptiertes Risiko)
+**Verwandt:** ADR-0003 (Reverse-engineered internes API — akzeptiertes Risiko); siehe Cross-Repo-Hinweis
+unten zu ADR-0008 (fileee-server)
+
+> **Nachtrag (2026-07-24, Repo-Split):** Der Ausschluss von Hartem-Löschen unten wurde durch
+> ADR-0008 **verfeinert, nicht aufgehoben**: Die Library bietet inzwischen bewusst **geguardete**
+> Opt-in-Methoden `Documents.Delete`, `Contacts.Delete` und `Reminders.Delete` an (der Aufrufer muss
+> sie aktiv nutzen, kein impliziter Zugriff). Seit dem Repo-Split lebt ADR-0008 nicht mehr in diesem
+> Repo, sondern im separaten `fileee-server`-Repo, das den HTTP-Server rund um diese Library
+> betreibt und die zugehörigen Routen zusätzlich nur bei `FILEEE_ALLOW_DESTRUCTIVE=true`
+> registriert — sonst existieren sie serverseitig gar nicht. **`revision-lock` bleibt vollständig
+> ausgeschlossen** — das darunter beschriebene Risiko (Dokument wird serverseitig
+> unserialisierbar) ist von dieser Verfeinerung nicht betroffen und gilt unverändert. Status bleibt
+> `accepted`, da die ursprüngliche Risikoabwägung weiterhin zutrifft; Kontext und Entscheidung unten
+> sind unverändertes, historisches Protokoll. Details:
+> [ADR-0008 (fileee-server)](https://github.com/strausmann/fileee-server/blob/main/docs/adr/0008-fileee-server.md)
+> — der Link ist ein Vorwärtsverweis und löst erst auf, sobald das `fileee-server`-Repo angelegt ist.
 
 ## Kontext
 

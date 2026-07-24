@@ -108,6 +108,52 @@ func TestContactServiceUpdateHappyErrorNetwork(t *testing.T) {
 	})
 }
 
+// TestContactServiceDeleteHappyErrorNetwork deckt Delete() als Mutation-Funktion vollständig ab
+// (Test-Coverage-Pflicht): Happy-Path (200 -> nil), Error-Path (404 -> ErrNotFound per errors.Is)
+// und Network-Error. Delete ist ein Hard-DELETE — ADR-0007/ADR-0008 dokumentieren, warum die Lib
+// diese Methode trotzdem bewusst (geguardet) anbietet.
+func TestContactServiceDeleteHappyErrorNetwork(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"DELETE /api/contacts/rest/contact-1": {Status: 200},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		if err := client.Contacts.Delete(context.Background(), "contact-1"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("error path 404 -> ErrNotFound", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"DELETE /api/contacts/rest/unbekannt": {Status: 404, Body: []byte(`{"errorCode":"NOT_FOUND"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		err := client.Contacts.Delete(context.Background(), "unbekannt")
+		if !errorsIsNotFound(err) {
+			t.Fatalf("erwartet ErrNotFound, bekommen %v", err)
+		}
+	})
+
+	t.Run("network error", func(t *testing.T) {
+		client, err := New(
+			Credentials{Username: "test@example.invalid", Password: "test-pw"},
+			WithBaseURL("http://127.0.0.1:1"),
+			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+		)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		err = client.Contacts.Delete(context.Background(), "contact-1")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
+		}
+	})
+}
+
 // TestContactServiceCreateSendetPflichtfelderImRequestBody belegt das Wire-Format, dessen Fehlen
 // live gegen das Testkonto einen 400 ausgelöst hat (siehe Kommentar über contactCreateWire in
 // contacts.go): Create() MUSS contactStatus/connectedToOtherUser/fromUserDb/documentCounter/
