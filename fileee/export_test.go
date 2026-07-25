@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -52,6 +53,65 @@ func TestDocuments_ExportAll_EmptyDocumentIDs(t *testing.T) {
 	if !ok || len(ids) != 0 {
 		t.Errorf("documentIds muss ein leeres Array sein (= alle Dokumente), war %v", captured["documentIds"])
 	}
+}
+
+// TestDocuments_ExportZIPErrorNetwork deckt ExportZIP() (und über die gemeinsame Implementation
+// damit auch ExportAll()) als Mutation-Funktion vollständig ab (Test-Coverage-Pflicht
+// Finding I2): Happy-Path ist bereits durch TestDocuments_ExportZIP_WireForm/
+// TestDocuments_ExportAll_EmptyDocumentIDs abgedeckt, hier folgen Error-Path (echter Server-4xx)
+// und Network-Error für beide Einstiegspunkte.
+func TestDocuments_ExportZIPErrorNetwork(t *testing.T) {
+	t.Run("ExportZIP error path 400", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"POST /api/documents/rest/zip": {Status: 400, Body: []byte(`{"errorCode":"BAD_REQUEST"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		_, err := client.Documents.ExportZIP(context.Background(), []string{"d1"}, "geheim")
+		if err == nil {
+			t.Fatalf("erwartet Fehler bei 400, bekommen nil")
+		}
+	})
+
+	t.Run("ExportZIP network error", func(t *testing.T) {
+		client, err := New(
+			Credentials{Username: "test@example.invalid", Password: "test-pw"},
+			WithBaseURL("http://127.0.0.1:1"),
+			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+		)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, err = client.Documents.ExportZIP(context.Background(), []string{"d1"}, "geheim")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+	})
+
+	t.Run("ExportAll error path 500", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"POST /api/documents/rest/zip": {Status: 500, Body: []byte(`{"apiError":"boom"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		_, err := client.Documents.ExportAll(context.Background(), "geheim")
+		if err == nil {
+			t.Fatalf("erwartet Fehler bei 500, bekommen nil")
+		}
+	})
+
+	t.Run("ExportAll network error", func(t *testing.T) {
+		client, err := New(
+			Credentials{Username: "test@example.invalid", Password: "test-pw"},
+			WithBaseURL("http://127.0.0.1:1"),
+			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+		)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, err = client.Documents.ExportAll(context.Background(), "geheim")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+	})
 }
 
 func TestProcesses_Get(t *testing.T) {
