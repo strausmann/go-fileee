@@ -13,6 +13,26 @@ import (
 
 const defaultBaseURL = "https://my.fileee.com"
 
+// defaultTransport liefert einen eigenen *http.Transport (Clone von http.DefaultTransport) mit
+// einem zusätzlichen ResponseHeaderTimeout — NIE den globalen http.DefaultTransport selbst
+// mutieren, das wäre ein prozessweiter Seiteneffekt auf jeden anderen Code im selben Prozess.
+// http.DefaultTransport hat bereits einen Dial-Timeout (30s) und TLSHandshakeTimeout (10s), aber
+// KEINEN ResponseHeaderTimeout — eine Verbindung, die erfolgreich aufgebaut wurde, aber danach nie
+// eine Response sendet (hängender Fileee-Endpunkt), blockiert damit unbegrenzt, sofern der
+// Aufrufer nicht selbst einen Context mit Deadline übergibt (Whole-Codebase-Review Finding I5).
+// BEWUSST kein pauschales http.Client.Timeout: das würde die GESAMTE Requestdauer begrenzen und
+// große Uploads (Documents.Upload) oder ZIP-Exports (ExportZIP/ExportAll) mitten im Transfer
+// abschneiden — bodyProvider (transport.go) ist extra darauf ausgelegt, solche Bodies zu streamen.
+// ResponseHeaderTimeout begrenzt dagegen NUR die Time-to-First-Byte der Response-Header, nicht die
+// Dauer des nachfolgenden Body-Transfers.
+func defaultTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if t.ResponseHeaderTimeout <= 0 {
+		t.ResponseHeaderTimeout = 30 * time.Second
+	}
+	return t
+}
+
 // defaultStaticBaseURL ist der Static-Host, über den geteilte Dokumente als Voll-PDF ausgeliefert
 // werden (GET /shares/get/:shareId/:documentId/pdf) — ein ANDERER Host als das API-baseURL.
 const defaultStaticBaseURL = "https://static.fileee.com"
@@ -117,10 +137,17 @@ func New(creds Credentials, opts ...Option) (*Client, error) {
 	// base ist der zugrundeliegende RoundTripper, den rateLimitedTransport umwickelt. Wird über
 	// WithHTTPClient ein *http.Client mit eigenem Transport übergeben (z. B. für Custom-TLS oder
 	// Proxy), MUSS dieser als Basis übernommen werden — sonst wird er beim Wrappen stillschweigend
-	// verworfen und WithHTTPClient hätte keinerlei Effekt auf das Transport-Verhalten.
+	// verworfen und WithHTTPClient hätte keinerlei Effekt auf das Transport-Verhalten. Nur wenn der
+	// Aufrufer GAR KEINEN eigenen *http.Client übergeben hat, kommt defaultTransport() mit dem
+	// defensiven ResponseHeaderTimeout zum Einsatz (Finding I5) — hat der Aufrufer WithHTTPClient
+	// genutzt (auch ohne eigenen Transport), hat er sich bewusst für die Kontrolle entschieden und
+	// die Lib mischt sich nicht ein.
 	base := http.RoundTripper(http.DefaultTransport)
-	if cfg.httpClient != nil && cfg.httpClient.Transport != nil {
+	switch {
+	case cfg.httpClient != nil && cfg.httpClient.Transport != nil:
 		base = cfg.httpClient.Transport
+	case cfg.httpClient == nil:
+		base = defaultTransport()
 	}
 
 	transport := &rateLimitedTransport{

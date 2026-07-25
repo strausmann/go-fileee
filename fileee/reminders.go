@@ -101,15 +101,45 @@ func (s *reminderService) Create(ctx context.Context, r *Reminder) (*Reminder, e
 	return &created, nil
 }
 
+// reminderUpdateWire ist der Aktualisierungs-Body — analog zu reminderCreateWire lässt er
+// Created/Modified bewusst weg. Grund: ein realistischer Update-Aufruf lädt zuerst per Get einen
+// Reminder (Created/Modified dabei vom Server befüllt) und schickt ihn danach an Update zurück —
+// ein naives json.Marshal(r) des öffentlichen Reminder-Structs (dessen Created/Modified nur
+// `omitempty` sind, nicht generell ausgeschlossen) würde diese Felder dann unbeabsichtigt erneut
+// mitsenden, exakt die Feld-Kombination, an der das Create-Pendant nachweislich mit 500
+// antwortet (siehe reminderCreateWire-Kommentar). Bis das exakte Update-Wire-Format live gegen
+// den echten Server verifiziert ist, mirrort dieser Typ defensiv dasselbe Muster wie Create
+// (Whole-Codebase-Review Finding I3).
+type reminderUpdateWire struct {
+	ID                  string `json:"id"`
+	Description         string `json:"description"`
+	DetailedDescription string `json:"detailedDescription"`
+	DocumentID          string `json:"documentId"`
+	StartDate           string `json:"startDate"`
+	Done                bool   `json:"done"`
+	Deleted             bool   `json:"deleted"`
+	Version             int64  `json:"version"`
+}
+
 // Update speichert Änderungen an einer bestehenden Erinnerung (PUT /api/reminders/rest/:id,
-// analog zu Contacts.Update — die Entität wird unverändert als Wire-Form gesendet; das exakte
-// Update-Wire-Format ist wie bei Contacts.Update nicht separat code-belegt, folgt aber demselben
-// generischen REST-Muster wie Documents.Update/Contacts.Update).
+// analog zu Contacts.Update). Das exakte Update-Wire-Format ist wie bei Contacts.Update nicht
+// separat code-belegt, folgt aber demselben generischen REST-Muster wie Documents.Update/
+// Contacts.Update — MIT der Ausnahme, dass Created/Modified bewusst weggelassen werden
+// (reminderUpdateWire, Finding I3).
 func (s *reminderService) Update(ctx context.Context, r *Reminder) (*Reminder, error) {
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(r)
+	body, err := json.Marshal(reminderUpdateWire{
+		ID:                  r.ID,
+		Description:         r.Description,
+		DetailedDescription: r.DetailedDescription,
+		DocumentID:          r.DocumentID,
+		StartDate:           r.StartDate,
+		Done:                r.Done,
+		Deleted:             r.Deleted,
+		Version:             r.Version,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fileee: reminder update encode: %w", err)
 	}

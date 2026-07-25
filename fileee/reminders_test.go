@@ -60,6 +60,70 @@ func TestReminders_Create_ServerError(t *testing.T) {
 	}
 }
 
+// TestReminders_Update_OmitsCreatedModified ist der Regressionstest für Whole-Codebase-Review
+// Finding I3: Update() marshallte bisher das öffentliche Reminder-Struct direkt (json.Marshal(r)),
+// wodurch nicht-leere Created/Modified-Felder unbeabsichtigt mitgesendet wurden — exakt die
+// Feld-Kombination, an der das Create-Pendant nachweislich mit 500 scheitert (siehe
+// reminderCreateWire-Kommentar in reminders.go). Der realistische Aufrufpfad ist Get (liefert
+// Created/Modified befüllt) gefolgt von Update() mit demselben, unveränderten Reminder — genau
+// das wird hier simuliert.
+func TestReminders_Update_OmitsCreatedModified(t *testing.T) {
+	var captured map[string]any
+	srv := newMockJSONCaptureServer(t, ensureSessionRoutes(),
+		"PUT", "/api/reminders/rest/r1",
+		func(raw []byte) (int, []byte) {
+			_ = json.Unmarshal(raw, &captured)
+			return 200, []byte(`{"id":"r1","description":"Neu","documentId":"d1","startDate":"2026-09-01","version":1}`)
+		})
+	c := newTestClientAgainstMockServer(t, srv)
+
+	// Get-geformter Reminder: Created/Modified sind vom Server befüllt (nicht leer).
+	r := &Reminder{
+		ID: "r1", Description: "Neu", DocumentID: "d1", StartDate: "2026-09-01", Version: 0,
+		Created: "2026-07-01T00:00:00.000Z", Modified: "2026-07-20T00:00:00.000Z",
+	}
+	if _, err := c.Reminders.Update(context.Background(), r); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("Mock-Handler wurde nicht aufgerufen — kein Request-Body eingefangen")
+	}
+	if _, ok := captured["created"]; ok {
+		t.Errorf("created darf NICHT im Update-Request landen (siehe reminderCreateWire-500-Bug), Body: %+v", captured)
+	}
+	if _, ok := captured["modified"]; ok {
+		t.Errorf("modified darf NICHT im Update-Request landen (siehe reminderCreateWire-500-Bug), Body: %+v", captured)
+	}
+	if captured["id"] != "r1" {
+		t.Errorf("id = %v, erwartet r1", captured["id"])
+	}
+	if captured["description"] != "Neu" {
+		t.Errorf("description = %v, erwartet Neu", captured["description"])
+	}
+}
+
+// TestReminders_Create_NetworkError schließt die in Finding I4 vermisste Lücke: Happy-Path
+// (TestReminders_Create_WireForm) und Error-Path (TestReminders_Create_ServerError) existieren
+// bereits, aber kein Network-Error-Test — anders als bei Update/Delete in dieser Datei.
+func TestReminders_Create_NetworkError(t *testing.T) {
+	client, err := New(
+		Credentials{Username: "test@example.invalid", Password: "test-pw"},
+		WithBaseURL("http://127.0.0.1:1"),
+		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = client.Reminders.Create(context.Background(), &Reminder{Description: "x", DocumentID: "d1", StartDate: "2026-08-24"})
+	if err == nil {
+		t.Fatalf("erwartet Network-Error, bekommen nil")
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
+	}
+}
+
 // TestReminderServiceUpdateHappyErrorNetwork deckt Update() als Mutation-Funktion vollständig ab
 // (Test-Coverage-Pflicht): Happy-Path (200, dekodierte Reminder), Error-Path (422 -> gewrapptes
 // *APIError) und Network-Error. Analog zu TestContactServiceUpdateHappyErrorNetwork.

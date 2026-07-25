@@ -192,19 +192,56 @@ func TestNetzwerkfehlerLoestBackoffRetriesAus(t *testing.T) {
 	}
 }
 
+// TestXSRFHeaderNurBeiMutierendenMethoden ist der Regressionstest für Whole-Codebase-Review
+// Finding C1: injectXSRF fragte den Cookie-Jar bisher fälschlich an der reinen baseURL (Pfad "/")
+// ab. Der reale Fileee-Server setzt das XSRF-TOKEN-Cookie aber ohne explizites Path-Attribut bei
+// GET /api/f/start — http.CookieJar leitet daraus per RFC 6265 §5.1.4 den Default-Path "/api/f"
+// ab (Verzeichnis des Request-Pfads), NICHT "/". Damit das reale Verhalten statt eines
+// künstlichen Test-Setups geprüft wird, holt dieser Test das Cookie über eine ECHTE
+// /api/f/start-Antwort (kein explizites Path — genau wie im Live-Handshake), statt es per
+// jar.SetCookies direkt an der Root-URL zu platzieren (das hätte den Bug maskiert, weil ein an
+// Root gesetztes Cookie zufällig auch die alte, fehlerhafte Root-Abfrage matcht).
 func TestXSRFHeaderNurBeiMutierendenMethoden(t *testing.T) {
 	var gotHeaderOnPost, gotHeaderOnGet string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+		switch {
+		case r.URL.Path == "/api/f/start":
+			// Bewusst OHNE Cookie.Path — spiegelt exakt das live-verifizierte Verhalten des
+			// echten Fileee-Servers (siehe authCookieScopeURL-Kommentar in auth.go).
+			http.SetCookie(w, &http.Cookie{Name: "XSRF-TOKEN", Value: "xsrf-echt"})
+			w.WriteHeader(200)
+		case r.Method == http.MethodPost:
 			gotHeaderOnPost = r.Header.Get("x-xsrf-token")
-		} else {
+			w.WriteHeader(200)
+		default:
 			gotHeaderOnGet = r.Header.Get("x-xsrf-token")
+			w.WriteHeader(200)
 		}
-		w.WriteHeader(200)
 	}))
 	defer srv.Close()
-	transport := newTestTransport(t, srv, nil)
-	client := &http.Client{Transport: transport}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	transport := &rateLimitedTransport{
+		base:    http.DefaultTransport,
+		limiter: newLimiter(1000, 1000),
+		backoff: &ExponentialBackoff{BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond, MaxAttempts: 3},
+		jar:     jar,
+		baseURL: srv.URL,
+		sleep:   noopSleep,
+	}
+	// client.Jar MUSS auf denselben Jar zeigen wie transport.jar — genau wie in der Produktion
+	// (client.go: hc.Jar = jar; transport.jar = jar), damit die echte Set-Cookie-Antwort von
+	// GET /api/f/start tatsächlich im selben Jar landet, den injectXSRF später abfragt.
+	client := &http.Client{Transport: transport, Jar: jar}
+
+	startResp, err := client.Get(srv.URL + "/api/f/start")
+	if err != nil {
+		t.Fatalf("GET /api/f/start: %v", err)
+	}
+	startResp.Body.Close()
 
 	getResp, err := client.Get(srv.URL + "/lesen")
 	if err != nil {
@@ -221,8 +258,8 @@ func TestXSRFHeaderNurBeiMutierendenMethoden(t *testing.T) {
 	if gotHeaderOnGet != "" {
 		t.Fatalf("x-xsrf-token hätte bei GET NICHT gesetzt sein dürfen, war %q", gotHeaderOnGet)
 	}
-	if gotHeaderOnPost != "xsrf-initial" {
-		t.Fatalf("x-xsrf-token bei POST = %q, erwartet xsrf-initial", gotHeaderOnPost)
+	if gotHeaderOnPost != "xsrf-echt" {
+		t.Fatalf("x-xsrf-token bei POST = %q, erwartet xsrf-echt (aus echtem, pfadlosem /api/f/start-Cookie)", gotHeaderOnPost)
 	}
 }
 

@@ -41,9 +41,15 @@ func NewShareClient(opts ...Option) *ShareClient {
 		cfg.staticBaseURL = defaultStaticBaseURL
 	}
 	jar, _ := cookiejar.New(nil)
+	// Siehe defaultTransport()-Kommentar (client.go) und New(): derselbe I5-Fix gilt hier — ohne
+	// eigenen WithHTTPClient hätte der ShareClient sonst ebenfalls keinerlei Absicherung gegen
+	// einen hängenden Endpunkt.
 	base := http.RoundTripper(http.DefaultTransport)
-	if cfg.httpClient != nil && cfg.httpClient.Transport != nil {
+	switch {
+	case cfg.httpClient != nil && cfg.httpClient.Transport != nil:
 		base = cfg.httpClient.Transport
+	case cfg.httpClient == nil:
+		base = defaultTransport()
 	}
 	transport := &rateLimitedTransport{
 		base:      base,

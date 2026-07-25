@@ -17,8 +17,15 @@ type Share struct {
 	ShareID string `json:"shareId"`
 }
 
-// Share erzeugt eine Freigabe für die angegebenen Dokumente und liefert deren Link.
+// Share erzeugt eine Freigabe für die angegebenen Dokumente und liefert deren Link. documentIDs
+// darf NICHT leer sein — anders als bei ExportZIP/ExportAll bedeutet eine leere Liste hier NICHT
+// "alle Dokumente"; unklar (und unnötig), wie der Server ein leeres documentIds= interpretieren
+// würde, deshalb ein klarer Fehler statt eines stillen No-op-Requests (Whole-Codebase-Review
+// Finding M1).
 func (s *DocumentService) Share(ctx context.Context, documentIDs []string) (*Share, error) {
+	if len(documentIDs) == 0 {
+		return nil, fmt.Errorf("fileee: Share benötigt mindestens eine documentID")
+	}
 	if err := s.client.EnsureSession(ctx); err != nil {
 		return nil, err
 	}

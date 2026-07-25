@@ -100,6 +100,20 @@ func cloneRequest(req *http.Request, getBody func() (io.ReadCloser, error)) (*ht
 	return clone, nil
 }
 
+// apiCookieScopeURL liefert die URL, gegen die der Cookie-Jar nach Handshake-/XSRF-Cookies
+// befragt wird. Bewusst NICHT die reine baseURL (Pfad "/"): Set-Cookie-Antworten des Handshakes
+// (/api/f/start, /api/f/existent, /api/f/login) tragen kein explizites Path-Attribut, daher
+// leitet http.CookieJar den Default-Path nach RFC 6265 §5.1.4 vom Request-Pfad ab — das
+// Verzeichnis von z.B. "/api/f/login" ist "/api/f", NICHT "/". Eine Abfrage mit der reinen
+// baseURL (Pfad "/") matcht diesen Cookie-Path dann NICHT (path-match schlägt fehl) und liefert
+// still eine leere Cookie-Liste. Von authCookieScopeURL (auth.go) UND injectXSRF (hier) genutzt —
+// beide brauchen exakt denselben Scope, DRY statt zwei Stellen mit demselben Pfad-Literal zu
+// pflegen (Whole-Codebase-Review Finding C1: injectXSRF fragte bisher fälschlich an der reinen
+// baseURL ab, wodurch der x-xsrf-token-Header bei JEDER echten mutierenden Anfrage leer blieb).
+func apiCookieScopeURL(baseURL string) (*url.URL, error) {
+	return url.Parse(baseURL + "/api/f/")
+}
+
 // injectXSRF setzt den x-xsrf-token-Header aus dem Cookie-Jar — nur bei mutierenden Methoden
 // (POST/PUT/DELETE), da GET-Requests keinen CSRF-Schutz benötigen (Umbrella-Spec §4.5).
 func (t *rateLimitedTransport) injectXSRF(req *http.Request) {
@@ -111,7 +125,7 @@ func (t *rateLimitedTransport) injectXSRF(req *http.Request) {
 	if t.jar == nil {
 		return
 	}
-	u, err := url.Parse(t.baseURL)
+	u, err := apiCookieScopeURL(t.baseURL)
 	if err != nil {
 		return
 	}
