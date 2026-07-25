@@ -1,7 +1,7 @@
 name: release
 on:
   schedule:
-    - cron: "0 4 * * *"   # taeglich 04:00 UTC — go-fileee released 1h vor fileee-server. NIE on push (User-Vorgabe).
+    - cron: "0 3 * * *"   # taeglich 03:00 UTC — Kaskade 2/4: go-fileee Release (nach eigenem Renovate). NIE on push.
   workflow_dispatch:
 permissions: { contents: write, issues: write, pull-requests: write }
 jobs:
