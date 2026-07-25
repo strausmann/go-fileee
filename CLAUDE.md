@@ -67,6 +67,25 @@ Siehe [ADR-0004](docs/adr/0004-test-strategie.md).
 - **Integration-Tests** niedrigfrequent gegen ein **Wegwerf-Test-Konto**, aus einem Docker-Container, Creds aus **Infisical** — **nie** in öffentlicher CI.
 - **Mutations-Pfade** (Upload/Update): Happy-Path + Error-Path (4xx/5xx) + Network-Error/Timeout abdecken.
 
+## Dokumentation (VERBINDLICH)
+
+Die Dokumentation ist Teil der **Definition of Done** — nicht „später". Jede Änderung an der
+**öffentlichen API oder am Verhalten** der Library (`fileee/`) — neue/geänderte/entfernte exportierte
+Funktionen, Methoden, Typen, Optionen (`With…`), Fehler-Typen, oder geändertes Verhalten (Auth,
+Rate-Limit, Timeouts, Re-Auth, …) — MUSS **im selben Commit/PR** in der Doku nachgezogen werden:
+
+1. **`README.md`** — Feature-Übersicht (Service-/Methoden-Tabellen mit `Mutation?`), Quickstart,
+   Client-Optionen-Tabelle, Fehler-Typen, Auth-Modell. Keine veralteten Methodennamen/Signaturen
+   stehenlassen.
+2. **`fileee/doc.go`** (Package-Godoc) — der Paket-Kommentar rendert öffentlich auf
+   **[pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee)**. Überblick, Options-Liste,
+   Beispiel und alle Aussagen dort aktuell halten.
+3. Jedes exportierte Symbol braucht einen Godoc-Kommentar — `scripts/doc-coverage.sh` muss **0
+   undokumentierte Exports** melden.
+
+**Verstoß-Indikator:** Ein PR, der eine exportierte API ändert, aber `README.md`/`fileee/doc.go`
+unverändert lässt, ist **unvollständig** — Reviewer setzen NEEDS_FIXES.
+
 ## ADR-Prozess
 
 - **Vor jeder Architektur-, Technologie- oder Betriebs-Entscheidung** die bestehenden ADRs unter [`docs/adr/`](docs/adr/) lesen.
