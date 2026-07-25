@@ -2,7 +2,9 @@ package fileee
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"path/filepath"
 	"testing"
 )
 
@@ -103,4 +105,85 @@ func TestBoxes_RemoveDocument(t *testing.T) {
 	if gotMethod != http.MethodDelete || gotPath != "/api/fileeeboxes/b1/d1" {
 		t.Errorf("falscher Request: %s %s", gotMethod, gotPath)
 	}
+}
+
+// boxNetworkErrorTestClient baut einen Client gegen einen unerreichbaren Host — Standard-Fixture
+// für die Network-Error-Subtests unten (Test-Coverage-Pflicht: jede Mutation-Funktion braucht
+// Happy + Error(4xx/5xx) + Network-Error).
+func boxNetworkErrorTestClient(t *testing.T) *Client {
+	t.Helper()
+	client, err := New(
+		Credentials{Username: "test@example.invalid", Password: "test-pw"},
+		WithBaseURL("http://127.0.0.1:1"),
+		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return client
+}
+
+// TestBoxService_AddDocumentErrorNetwork deckt AddDocument() als Mutation-Funktion vollständig ab
+// (Test-Coverage-Pflicht Finding I2): Happy-Path ist bereits durch TestBoxes_AddDocument
+// abgedeckt, hier folgen Error-Path (echter Server-4xx) und Network-Error.
+func TestBoxService_AddDocumentErrorNetwork(t *testing.T) {
+	t.Run("error path 409", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"POST /api/fileeeboxes/b1/d1": {Status: 409, Body: []byte(`{"errorCode":"CONFLICT"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		err := client.Boxes.AddDocument(context.Background(), "b1", "d1")
+		if err == nil {
+			t.Fatalf("erwartet Fehler bei 409, bekommen nil")
+		}
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("erwartet gewrapptes *APIError, bekommen %T: %v", err, err)
+		}
+	})
+
+	t.Run("network error", func(t *testing.T) {
+		client := boxNetworkErrorTestClient(t)
+		err := client.Boxes.AddDocument(context.Background(), "b1", "d1")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
+		}
+	})
+}
+
+// TestBoxService_RemoveDocumentErrorNetwork deckt RemoveDocument() als Mutation-Funktion
+// vollständig ab (Test-Coverage-Pflicht Finding I2): Happy-Path ist bereits durch
+// TestBoxes_RemoveDocument abgedeckt, hier folgen Error-Path (echter Server-5xx) und
+// Network-Error.
+func TestBoxService_RemoveDocumentErrorNetwork(t *testing.T) {
+	t.Run("error path 500", func(t *testing.T) {
+		routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
+			"DELETE /api/fileeeboxes/b1/d1": {Status: 500, Body: []byte(`{"apiError":"boom"}`)},
+		})
+		client := newTestClientAgainstMock(t, routes)
+		err := client.Boxes.RemoveDocument(context.Background(), "b1", "d1")
+		if err == nil {
+			t.Fatalf("erwartet Fehler bei 500, bekommen nil")
+		}
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("erwartet gewrapptes *APIError, bekommen %T: %v", err, err)
+		}
+	})
+
+	t.Run("network error", func(t *testing.T) {
+		client := boxNetworkErrorTestClient(t)
+		err := client.Boxes.RemoveDocument(context.Background(), "b1", "d1")
+		if err == nil {
+			t.Fatalf("erwartet Network-Error, bekommen nil")
+		}
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			t.Fatalf("Network-Error darf kein *APIError sein, bekommen %v", apiErr)
+		}
+	})
 }
