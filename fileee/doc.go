@@ -11,6 +11,13 @@
 // Einladungen) ab. Für anonyme Empfänger eines Freigabe-Links gibt es den credential-losen
 // [ShareClient].
 //
+// # Fertiger Server statt Library
+//
+// Wer keinen eigenen Go-Code schreiben möchte, kann fileee-server verwenden — einen deploybaren
+// REST-API-/Docker-Server um diese Library (Huma v2, OpenAPI 3.1, statisches Bearer-Token,
+// Container-Image auf GHCR/Docker Hub), gedacht für N8N-/CI-/Automatisierungs-Anbindung:
+// https://github.com/strausmann/fileee-server
+//
 // # Authentifizierung
 //
 // Fileee nutzt reine Cookie-Authentifizierung (kein Bearer-/Refresh-Token). Der Login schickt
