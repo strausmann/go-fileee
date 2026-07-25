@@ -10,6 +10,11 @@ Eine **inoffizielle** Go-Client-Library für das **interne** Web-App-API von [Fi
 
 > **Status:** Öffentliches Repository, aktueller Release-Tag `v0.1.1`. Reverse-engineertes internes API — **keine Stabilitätsgarantie**, Endpunkte/Feldformate können sich jederzeit ändern.
 
+> **Fertiger Server statt Library?** Für einen deploybaren **REST-API-/Docker-Server** um diese
+> Library — [`fileee-server`](https://github.com/strausmann/fileee-server) (Huma v2, OpenAPI 3.1,
+> statisches Bearer-Token, Container-Image auf GHCR + Docker Hub). Ideal für N8N-/CI-/Automatisierungs-
+> Anbindung ohne eigenen Go-Code.
+
 ## Über Fileee
 
 [Fileee](https://www.fileee.com) ist ein Dokumentenmanagement-Dienst der fileee GmbH (Deutschland),
