@@ -132,3 +132,23 @@ func TestShareClient_DownloadSharedPage(t *testing.T) {
 		t.Fatalf("OCR-Body falsch: %q", b)
 	}
 }
+
+// TestNewShareClientOhneWithHTTPClientSetztDefaultResponseHeaderTimeout ist das ShareClient-
+// Gegenstück zu TestNewOhneWithHTTPClientSetztDefaultResponseHeaderTimeout (client_test.go):
+// Finding I5 galt explizit auch für NewShareClient, da anonyme Empfänger (z. B. ein N8N-Webhook-
+// Workflow) genauso von einem hängenden Endpunkt betroffen wären, ohne selbst einen Context mit
+// Deadline zu setzen.
+func TestNewShareClientOhneWithHTTPClientSetztDefaultResponseHeaderTimeout(t *testing.T) {
+	sc := NewShareClient()
+	rt, ok := sc.httpClient.Transport.(*rateLimitedTransport)
+	if !ok {
+		t.Fatalf("erwartet *rateLimitedTransport als ShareClient-Transport, bekommen %T", sc.httpClient.Transport)
+	}
+	tr, ok := rt.base.(*http.Transport)
+	if !ok {
+		t.Fatalf("erwartet *http.Transport als Basis ohne WithHTTPClient, bekommen %T", rt.base)
+	}
+	if tr.ResponseHeaderTimeout <= 0 {
+		t.Fatalf("erwartet einen positiven ResponseHeaderTimeout als Default-Absicherung gegen hängende Endpunkte (Finding I5), bekommen %v", tr.ResponseHeaderTimeout)
+	}
+}

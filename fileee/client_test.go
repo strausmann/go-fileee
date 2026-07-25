@@ -95,6 +95,52 @@ func TestNewMitWithHTTPClientNutztCustomTransportAlsBasis(t *testing.T) {
 	}
 }
 
+// TestNewOhneWithHTTPClientSetztDefaultResponseHeaderTimeout deckt Whole-Codebase-Review
+// Finding I5 ab: ohne WithHTTPClient hatte der interne *http.Client keinerlei Request-Timeout —
+// eine hängende Fileee-Antwort (TCP verbunden, aber der Server sendet nie Response-Header) hätte
+// einen Aufruf unbegrenzt blockiert. Ein pauschales http.Client.Timeout wäre KEINE Lösung
+// gewesen (schneidet große Uploads/Downloads mitten im Transfer ab), deshalb muss der Default-
+// Transport stattdessen einen ResponseHeaderTimeout tragen — der begrenzt NUR die Time-to-
+// First-Byte, nicht die Dauer des Body-Transfers danach.
+func TestNewOhneWithHTTPClientSetztDefaultResponseHeaderTimeout(t *testing.T) {
+	client, err := New(
+		Credentials{Username: "test@example.invalid", Password: "test-pw"},
+		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr, ok := client.transport.base.(*http.Transport)
+	if !ok {
+		t.Fatalf("erwartet *http.Transport als Basis ohne WithHTTPClient, bekommen %T", client.transport.base)
+	}
+	if tr.ResponseHeaderTimeout <= 0 {
+		t.Fatalf("erwartet einen positiven ResponseHeaderTimeout als Default-Absicherung gegen hängende Endpunkte (Finding I5), bekommen %v", tr.ResponseHeaderTimeout)
+	}
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok && tr == dt {
+		t.Fatal("Default-Transport darf NICHT der geteilte globale http.DefaultTransport sein (Prozess-weiter Seiteneffekt)")
+	}
+}
+
+// TestNewMitWithHTTPClientUeberschreibtDefaultTimeoutNicht belegt das Gegenstück zu Finding I5:
+// übergibt der Aufrufer per WithHTTPClient einen eigenen *http.Client (mit oder ohne eigenen
+// Transport), bleibt dessen Transport UNVERÄNDERT als Basis erhalten — die Lib erzwingt den
+// Default-ResponseHeaderTimeout nur, wenn der Aufrufer gar keinen eigenen Client übergeben hat.
+func TestNewMitWithHTTPClientUeberschreibtDefaultTimeoutNicht(t *testing.T) {
+	custom := &recordingRoundTripper{base: http.DefaultTransport}
+	client, err := New(
+		Credentials{Username: "test@example.invalid", Password: "test-pw"},
+		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
+		WithHTTPClient(&http.Client{Transport: custom}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if client.transport.base != http.RoundTripper(custom) {
+		t.Fatalf("WithHTTPClient-Transport hätte unverändert als Basis übernommen werden müssen, bekommen %T", client.transport.base)
+	}
+}
+
 // TestNewMutiertAufruferClientNicht belegt, dass New() den per WithHTTPClient übergebenen
 // *http.Client NICHT mutiert — weder dessen Transport noch dessen Jar dürfen nach dem Aufruf
 // verändert sein. Eine Library darf ein aufrufer-eigenes Objekt nicht als Seiteneffekt umbauen,
