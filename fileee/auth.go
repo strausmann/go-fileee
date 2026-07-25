@@ -121,9 +121,10 @@ type existentResponseWire struct {
 // still eine leere Cookie-Liste — live per Test belegt (TestPersistSessionUndCookieValue schlug
 // mit der ursprünglich im Brief vorgesehenen `url.Parse(a.baseURL)`-Variante fehl). "/api/f/" ist
 // sowohl Präfix eines expliziten Server-seitigen "Path=/" als auch des abgeleiteten "/api/f"
-// Default-Path und deckt damit beide Fälle ab.
+// Default-Path und deckt damit beide Fälle ab. Delegiert an apiCookieScopeURL (transport.go), das
+// injectXSRF für exakt denselben Zweck nutzt — ein Pfad-Literal, zwei Aufrufer (DRY).
 func (a *authClient) authCookieScopeURL() (*url.URL, error) {
-	return url.Parse(a.baseURL + "/api/f/")
+	return apiCookieScopeURL(a.baseURL)
 }
 
 func (a *authClient) cookieValue(name string) string {
