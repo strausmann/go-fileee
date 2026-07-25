@@ -12,10 +12,10 @@ jobs:
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.23"
+          go-version-file: "go.mod"
       - run: go build ./...
       - run: go vet ./...
       # -race braucht cgo (Race-Detector-Runtime); der Lib-Build selbst bleibt pure-Go
