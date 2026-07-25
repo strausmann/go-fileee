@@ -2,19 +2,36 @@
 //
 // Fileee bietet kein offizielles, öffentlich dokumentiertes API. Dieses Paket spricht das interne
 // API der Web-App an, wie es aus Mitschnitten einer eingeloggten Session rekonstruiert wurde. Es
-// gibt keine Stabilitätsgarantie: Endpunkte oder Feldformate können sich jederzeit ändern.
+// gibt keine Stabilitätsgarantie: Endpunkte oder Feldformate können sich jederzeit ändern, und
+// Fileee kann das API jederzeit ohne Ankündigung anpassen.
+//
+// Der [Client] deckt Dokumente (Query/Diff/Get/Update/Upload/Download/Search/Share/Export/OCR),
+// die generischen Ressourcen Tags/Companies/DocumentTypes/DocumentTypeSchemes (read-only), sowie
+// Contacts und Reminders (inkl. Create/Update/Delete), FileeeBoxen und Konversationen (Chat, Teilen,
+// Einladungen) ab. Für anonyme Empfänger eines Freigabe-Links gibt es den credential-losen
+// [ShareClient].
 //
 // # Authentifizierung
 //
-// Fileee nutzt reine Cookie-Authentifizierung (kein Bearer-Token). Der Login schickt
+// Fileee nutzt reine Cookie-Authentifizierung (kein Bearer-/Refresh-Token). Der Login schickt
 // Benutzername, Passwort und – bei aktivierter Zwei-Faktor-Authentifizierung – einen aus dem
 // TOTP-Seed erzeugten Code im selben Request. Für schreibende Requests wird zusätzlich ein
-// CSRF-Header aus dem Session-Cookie gesetzt. Der Client verwaltet Cookie-Jar, CSRF-Header und
-// automatische Re-Authentifizierung selbst; der Aufrufer ruft nur EnsureSession auf (oder lässt
-// den ersten Service-Aufruf das übernehmen).
+// CSRF-Header (x-xsrf-token, Double-Submit-Cookie) aus dem Session-Cookie gesetzt. Der Client
+// verwaltet Cookie-Jar, CSRF-Header und automatische Re-Authentifizierung (inkl. Retry bei
+// HTTP 403) selbst; der Aufrufer ruft nur EnsureSession auf (oder lässt den ersten Service-Aufruf
+// das übernehmen).
 //
 // Credentials gehören nicht in den Code. Der TOTPSeed bleibt leer, wenn das Konto kein
 // Zwei-Faktor hat.
+//
+// # Destruktive Operationen
+//
+// Documents.Delete, Contacts.Delete und Reminders.Delete führen ein echtes, serverseitiges
+// Hard-DELETE ohne Papierkorb aus — es gibt keinen serverseitigen Bestätigungsschritt. Die Lib
+// bietet sie bewusst als Opt-in an (kein automatischer Aufrufpfad); Aufrufer müssen selbst dafür
+// sorgen, dass sie nicht versehentlich ausgelöst werden. Der Endpunkt revision-lock ist dagegen
+// bewusst NICHT implementiert, da er ein Dokument in einer Live-Verifikation serverseitig
+// unserialisierbar gemacht hat.
 //
 // # Schonender Betrieb
 //
@@ -66,7 +83,12 @@
 //
 // # Konfiguration
 //
-// New nimmt Option-Funktionen entgegen: WithBaseURL, WithHTTPClient, WithSessionStore,
-// WithRateLimit, WithBackoff, WithLogger und WithUserAgent. Ohne Optionen gelten sinnvolle
-// Defaults (my.fileee.com als Basis-URL, konservatives Rate-Limit, Session-Cache im Nutzerprofil).
+// New nimmt Option-Funktionen entgegen: WithBaseURL, WithStaticBaseURL, WithHTTPClient,
+// WithSessionStore, WithSessionFreshness, WithRateLimit, WithBackoff, WithLogger und
+// WithUserAgent. Ohne Optionen gelten sinnvolle Defaults (my.fileee.com als Basis-URL,
+// static.fileee.com als Static-Host für Freigaben, konservatives Rate-Limit von 1 Request/s mit
+// Burst 3, Session-Cache im Nutzerprofil, kein Freshness-Fenster). Für einen selbst übergebenen
+// *http.Client via WithHTTPClient mischt sich die Lib nicht in dessen Timeout/Transport ein; ohne
+// eigenen Client setzt sie lediglich einen ResponseHeaderTimeout von 30s, damit lange
+// Uploads/ZIP-Exports nicht durch ein pauschales Gesamt-Timeout abgeschnitten werden.
 package fileee
