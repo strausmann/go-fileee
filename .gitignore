@@ -37,6 +37,9 @@ Thumbs.db
 # Build-Artefakte
 /tmp/
 
+# Node (Release-/Commit-Tooling)
+node_modules/
+
 # SDD-Ledger (scratch)
 .superpowers/
 fileee/liveprobe_test.go

@@ -16,6 +16,34 @@ const convGetBody = `{"id":"c1","title":"Shared: Rechnung","conversationType":"D
   "state":{"read":true,"role":"OWNER","dateOfLastMessage":"2026-07-24T12:00:00Z","sharedDocumentIds":["d1"]},
   "version":3}`
 
+// TestMessage_IsReply deckt alle vier Kombinationen aus Type/Direction ab, die IsReply()
+// unterscheiden muss, plus den Zero-Value-Fall — insbesondere die beiden NEGATIVEN Fälle
+// (CHAT+FROM_USER und DOCUMENT+TO_USER), die vor Task 13 ungetestet waren: eine Mutation, die
+// `m.Type == "CHAT" && m.Direction == "TO_USER"` zu z.B. nur `m.Type == "CHAT"` oder invertiert
+// verändert, hätte ohne diese Fälle alle Tests weiterhin bestehen lassen.
+func TestMessage_IsReply(t *testing.T) {
+	cases := []struct {
+		name      string
+		msgType   string
+		direction string
+		want      bool
+	}{
+		{"CHAT+TO_USER ist eine eingehende Antwort", "CHAT", "TO_USER", true},
+		{"CHAT+FROM_USER ist die eigene ausgehende Nachricht, kein Reply", "CHAT", "FROM_USER", false},
+		{"DOCUMENT+TO_USER ist ein geteiltes Dokument, kein Chat-Reply", "DOCUMENT", "TO_USER", false},
+		{"PARTICIPANT_STATE+TO_USER ist ein System-Ereignis, kein Chat-Reply", "PARTICIPANT_STATE", "TO_USER", false},
+		{"Zero-Value (leerer Type/Direction) ist kein Reply", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Message{Type: tc.msgType, Direction: tc.direction}
+			if got := m.IsReply(); got != tc.want {
+				t.Errorf("IsReply() = %v, erwartet %v (Type=%q Direction=%q)", got, tc.want, tc.msgType, tc.direction)
+			}
+		})
+	}
+}
+
 func TestConversations_Get_AcceptanceStatus(t *testing.T) {
 	routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
 		"GET /api/conversations/rest/c1": {Status: 200, Body: []byte(convGetBody)},

@@ -23,10 +23,10 @@ type Conversation struct {
 	Invitation         bool              `json:"invitation"`
 	// Token ist der Invitation-Token — NUR bei einer offenen Einladung aus Sicht des eingeladenen
 	// Kontos gesetzt (leer, sobald beigetreten). Direkt an AcceptInvitation übergeben.
-	Token   string `json:"token,omitempty"`
-	Version int64  `json:"version"`
-	Created            string            `json:"created,omitempty"`
-	Modified           string            `json:"modified,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Version  int64  `json:"version"`
+	Created  string `json:"created,omitempty"`
+	Modified string `json:"modified,omitempty"`
 	// Messages sind die Chat-/System-Nachrichten der Konversation (aufsteigend). Message hält die
 	// gemeinsamen Felder typisiert und das vollständige JSON in Raw.
 	Messages []Message `json:"messages,omitempty"`

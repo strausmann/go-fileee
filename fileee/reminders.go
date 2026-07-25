@@ -24,10 +24,16 @@ type Reminder struct {
 	Modified            string `json:"modified,omitempty"`
 }
 
-// ReminderService liest und legt Erinnerungen an.
+// ReminderService liest, legt an, aktualisiert und löscht Erinnerungen. Delete ist ein
+// unwiderruflicher Hard-DELETE — bewusst geguardet angeboten (ADR-0007/ADR-0008), nicht
+// automatisch server-seitig freigeschaltet.
 type ReminderService interface {
 	ReadService[Reminder]
 	Create(ctx context.Context, r *Reminder) (*Reminder, error)
+	// Update speichert Änderungen an einer bestehenden Erinnerung.
+	Update(ctx context.Context, r *Reminder) (*Reminder, error)
+	// Delete löscht eine Erinnerung unwiderruflich anhand ihrer ID (kein serverseitiger Papierkorb).
+	Delete(ctx context.Context, id string) error
 }
 
 type reminderService struct {
@@ -93,4 +99,44 @@ func (s *reminderService) Create(ctx context.Context, r *Reminder) (*Reminder, e
 		return nil, fmt.Errorf("fileee: reminder create decode: %w", err)
 	}
 	return &created, nil
+}
+
+// Update speichert Änderungen an einer bestehenden Erinnerung (PUT /api/reminders/rest/:id,
+// analog zu Contacts.Update — die Entität wird unverändert als Wire-Form gesendet; das exakte
+// Update-Wire-Format ist wie bei Contacts.Update nicht separat code-belegt, folgt aber demselben
+// generischen REST-Muster wie Documents.Update/Contacts.Update).
+func (s *reminderService) Update(ctx context.Context, r *Reminder) (*Reminder, error) {
+	if err := s.client.EnsureSession(ctx); err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: reminder update encode: %w", err)
+	}
+	resp, err := s.client.putJSON(ctx, "/api/reminders/rest/"+r.ID, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("fileee: reminder update read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseAPIError(resp.StatusCode, respBody)
+	}
+	var updated Reminder
+	if err := json.Unmarshal(respBody, &updated); err != nil {
+		return nil, fmt.Errorf("fileee: reminder update decode: %w", err)
+	}
+	return &updated, nil
+}
+
+// Delete löscht eine Erinnerung unwiderruflich (Hard-DELETE, DELETE /api/reminders/rest/:id) — es
+// gibt serverseitig keinen Papierkorb/Undo für diese Operation. Die Lib bietet Delete bewusst als
+// geguardete Opt-in-Methode an (ADR-0007/ADR-0008); der fileee-server registriert die zugehörige
+// HTTP-Route nur, wenn beim Start FILEEE_ALLOW_DESTRUCTIVE gesetzt ist. Eine fehlende Erinnerung
+// liefert ErrNotFound (per errors.Is prüfbar), jeder andere Fehlerstatus ein *APIError.
+func (s *reminderService) Delete(ctx context.Context, id string) error {
+	return s.restService.delete(ctx, id)
 }
