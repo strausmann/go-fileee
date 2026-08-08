@@ -1,3 +1,18 @@
+## [0.2.0](https://github.com/strausmann/go-fileee/compare/v0.1.1...v0.2.0) (2026-08-08)
+
+### ⚠ BREAKING CHANGES
+
+* fileee.New(creds, opts...) heißt jetzt fileee.NewClient(creds,
+opts...). Signatur und Verhalten sind unverändert, kein Übergangs-Alias.
+* fileee.FileeeBox heißt jetzt fileee.Box. Die elf Konstanten
+fileee.StatusUploading .. fileee.StatusNew heißen jetzt
+fileee.DocumentStatusUploading .. fileee.DocumentStatusNew. Signaturen und
+Verhalten sind unverändert, kein Übergangs-Alias.
+
+### Features
+
+* konstruktor New zu NewClient, FileeeBox zu Box, Status-Konstanten zu DocumentStatus umbenennen ([#32](https://github.com/strausmann/go-fileee/issues/32)) ([65ca9cf](https://github.com/strausmann/go-fileee/commit/65ca9cf48c15b90f129e0b98392cc95b99338d55)), closes [#36](https://github.com/strausmann/go-fileee/issues/36) [#31](https://github.com/strausmann/go-fileee/issues/31) [#31](https://github.com/strausmann/go-fileee/issues/31) [#35](https://github.com/strausmann/go-fileee/issues/35)
+
 ## [0.1.1](https://github.com/strausmann/go-fileee/compare/v0.1.0...v0.1.1) (2026-07-25)
 
 ### Bug Fixes
