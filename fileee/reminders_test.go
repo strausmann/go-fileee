@@ -106,13 +106,13 @@ func TestReminders_Update_OmitsCreatedModified(t *testing.T) {
 // (TestReminders_Create_WireForm) und Error-Path (TestReminders_Create_ServerError) existieren
 // bereits, aber kein Network-Error-Test — anders als bei Update/Delete in dieser Datei.
 func TestReminders_Create_NetworkError(t *testing.T) {
-	client, err := New(
+	client, err := NewClient(
 		Credentials{Username: "test@example.invalid", Password: "test-pw"},
 		WithBaseURL("http://127.0.0.1:1"),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	_, err = client.Reminders.Create(context.Background(), &Reminder{Description: "x", DocumentID: "d1", StartDate: "2026-08-24"})
 	if err == nil {
@@ -158,13 +158,13 @@ func TestReminderServiceUpdateHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Reminders.Update(context.Background(), &Reminder{ID: "r1"})
 		if err == nil {
@@ -204,13 +204,13 @@ func TestReminderServiceDeleteHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		err = client.Reminders.Delete(context.Background(), "r1")
 		if err == nil {

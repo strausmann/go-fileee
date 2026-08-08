@@ -16,13 +16,13 @@ import (
 // braucht Happy + Error(4xx/5xx) + Network-Error).
 func networkErrorTestClient(t *testing.T) *Client {
 	t.Helper()
-	client, err := New(
+	client, err := NewClient(
 		Credentials{Username: "test@example.invalid", Password: "test-pw"},
 		WithBaseURL("http://127.0.0.1:1"),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	return client
 }
@@ -59,7 +59,7 @@ func TestConversations_SendMessage(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	}))
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "p"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "p"},
 		WithBaseURL(srv.URL), WithRateLimit(1000, 1000),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))))
 	if err != nil {
@@ -107,7 +107,7 @@ func TestUserID_FromJWTSub(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	}))
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "p"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "p"},
 		WithBaseURL(srv.URL), WithRateLimit(1000, 1000),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))))
 	if err != nil {
@@ -149,7 +149,7 @@ func TestConversations_ShareDocument(t *testing.T) {
 			w.WriteHeader(404)
 		}
 	}))
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "p"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "p"},
 		WithBaseURL(srv.URL), WithRateLimit(1000, 1000),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))))
 	if err != nil {
@@ -332,7 +332,7 @@ func convAuthMock(handler http.HandlerFunc) http.HandlerFunc {
 
 func convTestClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "p"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "p"},
 		WithBaseURL(srv.URL), WithRateLimit(1000, 1000),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))))
 	if err != nil {

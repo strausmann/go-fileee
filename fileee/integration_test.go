@@ -44,9 +44,9 @@ func TestIntegrationLiveFileee(t *testing.T) {
 	// Eigener, isolierter Session-Store im Test-Tempdir — berührt keinen produktiven Session-Cache.
 	store := NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))
 
-	client, err := New(Credentials{Username: username, Password: password, TOTPSeed: totpSeed}, WithSessionStore(store))
+	client, err := NewClient(Credentials{Username: username, Password: password, TOTPSeed: totpSeed}, WithSessionStore(store))
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 
 	// --- Schritt 1: Login/Session (belegt zugleich den kompletten Auth-Handshake der Lib live) ---

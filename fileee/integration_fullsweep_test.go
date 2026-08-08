@@ -34,7 +34,7 @@ func TestIntegrationFullSweep(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 
-	c, err := New(Credentials{Username: user, Password: os.Getenv("FILEEE_PASSWORD"), TOTPSeed: os.Getenv("FILEEE_TOTP_SEED")},
+	c, err := NewClient(Credentials{Username: user, Password: os.Getenv("FILEEE_PASSWORD"), TOTPSeed: os.Getenv("FILEEE_TOTP_SEED")},
 		WithRateLimit(0.5, 1))
 	if err != nil {
 		t.Fatal(err)

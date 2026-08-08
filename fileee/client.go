@@ -50,7 +50,7 @@ type clientConfig struct {
 	freshness     time.Duration
 }
 
-// Option konfiguriert einen Client bei New.
+// Option konfiguriert einen Client bei NewClient.
 type Option func(*clientConfig)
 
 // WithHTTPClient übernimmt Timeout und Transport eines eigenen *http.Client. Der Cookie-Jar wird
@@ -112,9 +112,9 @@ type Client struct {
 	logger     *slog.Logger
 }
 
-// New erstellt einen Client. Es wird NICHT sofort eingeloggt — der erste Request via
+// NewClient erstellt einen Client. Es wird NICHT sofort eingeloggt — der erste Request via
 // EnsureSession/Login stellt die Session her (Umbrella-Spec §3.1).
-func New(creds Credentials, opts ...Option) (*Client, error) {
+func NewClient(creds Credentials, opts ...Option) (*Client, error) {
 	if creds.Username == "" || creds.Password == "" {
 		return nil, fmt.Errorf("fileee: Credentials.Username und Password sind Pflichtfelder")
 	}

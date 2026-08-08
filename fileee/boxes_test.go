@@ -112,13 +112,13 @@ func TestBoxes_RemoveDocument(t *testing.T) {
 // Happy + Error(4xx/5xx) + Network-Error).
 func boxNetworkErrorTestClient(t *testing.T) *Client {
 	t.Helper()
-	client, err := New(
+	client, err := NewClient(
 		Credentials{Username: "test@example.invalid", Password: "test-pw"},
 		WithBaseURL("http://127.0.0.1:1"),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	return client
 }

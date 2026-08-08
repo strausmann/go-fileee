@@ -13,14 +13,14 @@ import (
 func newTestClientAgainstMock(t *testing.T, routes map[string]mockRoute) *Client {
 	t.Helper()
 	srv := newMockServer(t, jsonHandler(t, routes))
-	client, err := New(
+	client, err := NewClient(
 		Credentials{Username: "test@example.invalid", Password: "test-pw"},
 		WithBaseURL(srv.URL),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		WithRateLimit(1000, 1000),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	return client
 }
@@ -74,13 +74,13 @@ func TestTagServiceQueryHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Tags.Query(context.Background(), QueryOptions{})
 		if err == nil {
@@ -127,13 +127,13 @@ func TestTagServiceGetHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Tags.Get(context.Background(), "tag-1")
 		if err == nil {
