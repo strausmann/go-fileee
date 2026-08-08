@@ -22,7 +22,7 @@ func TestDocumentServiceQueryUndDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
-	if len(queried.Rows) != 1 || queried.Rows[0].Status != StatusDone {
+	if len(queried.Rows) != 1 || queried.Rows[0].Status != DocumentStatusDone {
 		t.Fatalf("Query-Ergebnis falsch: %+v", queried.Rows)
 	}
 
@@ -68,7 +68,7 @@ func TestDocumentServiceUpdateHappyErrorNetwork(t *testing.T) {
 			"PUT /api/documents/rest/doc-1": {Status: 200, Body: []byte(`{"id":"doc-1","status":"DONE","version":4}`)},
 		})
 		client := newTestClientAgainstMock(t, routes)
-		updated, err := client.Documents.Update(context.Background(), &Document{ID: "doc-1", Version: 3, Status: StatusDone})
+		updated, err := client.Documents.Update(context.Background(), &Document{ID: "doc-1", Version: 3, Status: DocumentStatusDone})
 		if err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -249,7 +249,7 @@ func TestDocumentServiceUploadHappyDuplikatErrorNetwork(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"` + r.FormValue("id") + `","status":"NEW"}`))
 		})
 		client := newTestClientAgainstMockServer(t, srv)
-		meta := UploadMetadata{Title: "Testrechnung.pdf", Document: &Document{Status: StatusNew}}
+		meta := UploadMetadata{Title: "Testrechnung.pdf", Document: &Document{Status: DocumentStatusNew}}
 		if _, err := client.Documents.Upload(context.Background(), strings.NewReader("test-inhalt"), meta); err != nil {
 			t.Fatalf("Upload: %v", err)
 		}

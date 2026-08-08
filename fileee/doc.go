@@ -7,7 +7,7 @@
 //
 // Der [Client] deckt Dokumente (Query/Diff/Get/Update/Upload/Download/Search/Share/Export/OCR),
 // die generischen Ressourcen Tags/Companies/DocumentTypes/DocumentTypeSchemes (read-only), sowie
-// Contacts und Reminders (inkl. Create/Update/Delete), FileeeBoxen und Konversationen (Chat, Teilen,
+// Contacts und Reminders (inkl. Create/Update/Delete), Boxen und Konversationen (Chat, Teilen,
 // Einladungen) ab. Für anonyme Empfänger eines Freigabe-Links gibt es den credential-losen
 // [ShareClient].
 //

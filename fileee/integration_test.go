@@ -262,7 +262,7 @@ func TestIntegrationLiveFileee(t *testing.T) {
 				lastStatus = doc.Status
 			}
 			switch doc.Status {
-			case StatusDone, StatusClassified, StatusError:
+			case DocumentStatusDone, DocumentStatusClassified, DocumentStatusError:
 				break pollLoop
 			}
 			if time.Now().After(deadline) {

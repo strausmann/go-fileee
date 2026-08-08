@@ -6,18 +6,18 @@ import (
 	"net/http"
 )
 
-// BoxDocument verweist auf ein in einer FileeeBox abgelegtes Dokument.
+// BoxDocument verweist auf ein in einer Box abgelegtes Dokument.
 type BoxDocument struct {
 	DocumentID string `json:"documentId"`
 	PageCount  int    `json:"pageCount"`
 	Modified   string `json:"modified"`
 }
 
-// FileeeBox ist eine per QR-Code identifizierte Ablagebox, deren Dokument-Zuordnung digital
+// Box ist eine per QR-Code identifizierte Ablagebox, deren Dokument-Zuordnung digital
 // verwaltet wird — entweder das physische fileeeBox-Produkt oder eine selbstgebaute fileeeDIY-Box
 // (ProductCode unterscheidet die Variante). BoxNr ist die Nummer, die beim Mail-Upload im Betreff
 // als "@box<N>" referenziert wird.
-type FileeeBox struct {
+type Box struct {
 	ID               string        `json:"id"`
 	BoxNr            int           `json:"boxNr"`
 	BoxName          string        `json:"boxName"`
@@ -31,12 +31,12 @@ type FileeeBox struct {
 	Deleted          bool          `json:"deleted,omitempty"`
 }
 
-// BoxService liest FileeeBoxen und verwaltet ihre Dokument-Zuordnung.
+// BoxService liest Boxen und verwaltet ihre Dokument-Zuordnung.
 type BoxService interface {
-	// List liefert alle FileeeBoxen des Kontos.
-	List(ctx context.Context) ([]FileeeBox, error)
+	// List liefert alle Boxen des Kontos.
+	List(ctx context.Context) ([]Box, error)
 	// Get lädt eine einzelne Box anhand ihrer ID.
-	Get(ctx context.Context, id string) (*FileeeBox, error)
+	Get(ctx context.Context, id string) (*Box, error)
 	// AddDocument heftet ein Dokument in eine Box ein.
 	AddDocument(ctx context.Context, boxID, documentID string) error
 	// RemoveDocument entfernt ein Dokument aus einer Box.
@@ -44,17 +44,17 @@ type BoxService interface {
 }
 
 type boxService struct {
-	restService[FileeeBox]
+	restService[Box]
 	client *Client
 }
 
 func newBoxService(c *Client) BoxService {
-	return &boxService{restService: restService[FileeeBox]{client: c, resourcePath: "fileeeboxes"}, client: c}
+	return &boxService{restService: restService[Box]{client: c, resourcePath: "fileeeboxes"}, client: c}
 }
 
-// List liefert alle FileeeBoxen des Kontos.
-func (s *boxService) List(ctx context.Context) ([]FileeeBox, error) {
-	res, err := s.Diff(ctx, NewCursor("FileeeBox"))
+// List liefert alle Boxen des Kontos.
+func (s *boxService) List(ctx context.Context) ([]Box, error) {
+	res, err := s.Diff(ctx, NewCursor("Box"))
 	if err != nil {
 		return nil, err
 	}
