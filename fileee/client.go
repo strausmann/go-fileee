@@ -50,7 +50,9 @@ type clientConfig struct {
 	freshness     time.Duration
 }
 
-// Option konfiguriert einen Client bei NewClient.
+// Option konfiguriert einen Client bei NewClient oder NewShareClient — beide Konstruktoren
+// nehmen dieselben Options entgegen (Auth-bezogene Optionen sind bei NewShareClient wirkungslos,
+// siehe dessen Godoc).
 type Option func(*clientConfig)
 
 // WithHTTPClient übernimmt Timeout und Transport eines eigenen *http.Client. Der Cookie-Jar wird
