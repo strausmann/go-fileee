@@ -40,17 +40,17 @@ const (
 type PublicDocumentStatus string
 
 const (
-	StatusUploading          PublicDocumentStatus = "UPLOADING"
-	StatusIP                 PublicDocumentStatus = "IP"
-	StatusOCR                PublicDocumentStatus = "OCR"
-	StatusAnalysing          PublicDocumentStatus = "ANALYSING"
-	StatusClassified         PublicDocumentStatus = "CLASSIFIED"
-	StatusDone               PublicDocumentStatus = "DONE"
-	StatusDeleted            PublicDocumentStatus = "DELETED"
-	StatusDeletedPermanently PublicDocumentStatus = "DELETED_PERMANENTLY"
-	StatusError              PublicDocumentStatus = "ERROR"
-	StatusLocal              PublicDocumentStatus = "LOCAL"
-	StatusNew                PublicDocumentStatus = "NEW"
+	DocumentStatusUploading          PublicDocumentStatus = "UPLOADING"
+	DocumentStatusIP                 PublicDocumentStatus = "IP"
+	DocumentStatusOCR                PublicDocumentStatus = "OCR"
+	DocumentStatusAnalysing          PublicDocumentStatus = "ANALYSING"
+	DocumentStatusClassified         PublicDocumentStatus = "CLASSIFIED"
+	DocumentStatusDone               PublicDocumentStatus = "DONE"
+	DocumentStatusDeleted            PublicDocumentStatus = "DELETED"
+	DocumentStatusDeletedPermanently PublicDocumentStatus = "DELETED_PERMANENTLY"
+	DocumentStatusError              PublicDocumentStatus = "ERROR"
+	DocumentStatusLocal              PublicDocumentStatus = "LOCAL"
+	DocumentStatusNew                PublicDocumentStatus = "NEW"
 )
 
 // PDFMode steuert GET /api/v1/documents/:id/pdf?mode=... (API.md §4.1, vollständig belegt).

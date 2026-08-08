@@ -22,7 +22,7 @@ func TestDocumentServiceQueryUndDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
-	if len(queried.Rows) != 1 || queried.Rows[0].Status != StatusDone {
+	if len(queried.Rows) != 1 || queried.Rows[0].Status != DocumentStatusDone {
 		t.Fatalf("Query-Ergebnis falsch: %+v", queried.Rows)
 	}
 
@@ -68,7 +68,7 @@ func TestDocumentServiceUpdateHappyErrorNetwork(t *testing.T) {
 			"PUT /api/documents/rest/doc-1": {Status: 200, Body: []byte(`{"id":"doc-1","status":"DONE","version":4}`)},
 		})
 		client := newTestClientAgainstMock(t, routes)
-		updated, err := client.Documents.Update(context.Background(), &Document{ID: "doc-1", Version: 3, Status: StatusDone})
+		updated, err := client.Documents.Update(context.Background(), &Document{ID: "doc-1", Version: 3, Status: DocumentStatusDone})
 		if err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -89,13 +89,13 @@ func TestDocumentServiceUpdateHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.Update(context.Background(), &Document{ID: "doc-1"})
 		if err == nil {
@@ -166,13 +166,13 @@ func TestDocumentServiceUploadHappyDuplikatErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error (EnsureSession schlägt fehl)", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.Upload(context.Background(), strings.NewReader("x"), UploadMetadata{Title: "x.pdf"})
 		if err == nil {
@@ -249,7 +249,7 @@ func TestDocumentServiceUploadHappyDuplikatErrorNetwork(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"` + r.FormValue("id") + `","status":"NEW"}`))
 		})
 		client := newTestClientAgainstMockServer(t, srv)
-		meta := UploadMetadata{Title: "Testrechnung.pdf", Document: &Document{Status: StatusNew}}
+		meta := UploadMetadata{Title: "Testrechnung.pdf", Document: &Document{Status: DocumentStatusNew}}
 		if _, err := client.Documents.Upload(context.Background(), strings.NewReader("test-inhalt"), meta); err != nil {
 			t.Fatalf("Upload: %v", err)
 		}
@@ -341,13 +341,13 @@ func TestDocumentServiceDownloadPDFHappyUndNotFound(t *testing.T) {
 	})
 
 	t.Run("EnsureSession schlägt fehl, Download-Request wird nie abgesetzt", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.DownloadPDF(context.Background(), "doc-1", PDFModeDownload)
 		if err == nil {
@@ -374,13 +374,13 @@ func TestDocumentServiceDownloadPageImage(t *testing.T) {
 	})
 
 	t.Run("EnsureSession schlägt fehl, Download-Request wird nie abgesetzt", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.DownloadPageImage(context.Background(), "page-1", ImageSizeSmedium, 3)
 		if err == nil {
@@ -430,13 +430,13 @@ func TestDocumentServiceDeleteHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		err = client.Documents.Delete(context.Background(), "doc-1")
 		if err == nil {
@@ -465,14 +465,14 @@ func newMockUploadServer(t *testing.T, authRoutes map[string]mockRoute, uploadHa
 
 func newTestClientAgainstMockServer(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
-	client, err := New(
+	client, err := NewClient(
 		Credentials{Username: "test@example.invalid", Password: "test-pw"},
 		WithBaseURL(srv.URL),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		WithRateLimit(1000, 1000),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	return client
 }

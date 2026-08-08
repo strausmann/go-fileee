@@ -99,13 +99,13 @@ func TestDocuments_ShareErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.Share(context.Background(), []string{"d1"})
 		if err == nil {
@@ -130,13 +130,13 @@ func TestDocuments_UnshareErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		err = client.Documents.Unshare(context.Background(), "d1")
 		if err == nil {

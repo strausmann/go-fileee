@@ -36,13 +36,13 @@ func TestContactServiceCreateHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Contacts.Create(context.Background(), &Contact{})
 		if err == nil {
@@ -89,13 +89,13 @@ func TestContactServiceUpdateHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Contacts.Update(context.Background(), &Contact{ID: "contact-1"})
 		if err == nil {
@@ -135,13 +135,13 @@ func TestContactServiceDeleteHappyErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		err = client.Contacts.Delete(context.Background(), "contact-1")
 		if err == nil {
