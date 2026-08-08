@@ -19,14 +19,14 @@ func TestWithLogger_EmitsRequestDebugEvents(t *testing.T) {
 	routes := mergeRoutes(ensureSessionRoutes(), map[string]mockRoute{
 		"GET /api/f/user-session": {Status: 200, Body: []byte(`{"authorized":true}`)},
 	})
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "pw"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "pw"},
 		WithBaseURL(newMockServer(t, jsonHandler(t, routes)).URL),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))),
 		WithRateLimit(1000, 1000),
 		WithLogger(logger),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	if err := c.EnsureSession(context.Background()); err != nil {
 		t.Fatalf("EnsureSession: %v", err)

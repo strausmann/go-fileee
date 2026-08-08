@@ -43,7 +43,7 @@ func countingAuthServer(t *testing.T, verifyHits *int64, sig chan<- struct{}) *h
 
 func freshTestClient(t *testing.T, srv *httptest.Server, freshness time.Duration, now func() time.Time) *Client {
 	t.Helper()
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "p"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "p"},
 		WithBaseURL(srv.URL), WithRateLimit(1000, 1000),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))),
 		WithSessionFreshness(freshness))

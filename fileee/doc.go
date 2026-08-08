@@ -7,7 +7,7 @@
 //
 // Der [Client] deckt Dokumente (Query/Diff/Get/Update/Upload/Download/Search/Share/Export/OCR),
 // die generischen Ressourcen Tags/Companies/DocumentTypes/DocumentTypeSchemes (read-only), sowie
-// Contacts und Reminders (inkl. Create/Update/Delete), FileeeBoxen und Konversationen (Chat, Teilen,
+// Contacts und Reminders (inkl. Create/Update/Delete), Boxen und Konversationen (Chat, Teilen,
 // Einladungen) ab. Für anonyme Empfänger eines Freigabe-Links gibt es den credential-losen
 // [ShareClient].
 //
@@ -61,7 +61,7 @@
 //
 //	func main() {
 //		// Credentials aus einer Secret-Quelle laden, nie hartkodieren.
-//		client, err := fileee.New(fileee.Credentials{
+//		client, err := fileee.NewClient(fileee.Credentials{
 //			Username: os.Getenv("FILEEE_USERNAME"),
 //			Password: os.Getenv("FILEEE_PASSWORD"),
 //			TOTPSeed: os.Getenv("FILEEE_TOTP_SEED"), // Base32-Seed, falls Zwei-Faktor aktiv ist
@@ -90,7 +90,7 @@
 //
 // # Konfiguration
 //
-// New nimmt Option-Funktionen entgegen: WithBaseURL, WithStaticBaseURL, WithHTTPClient,
+// NewClient nimmt Option-Funktionen entgegen: WithBaseURL, WithStaticBaseURL, WithHTTPClient,
 // WithSessionStore, WithSessionFreshness, WithRateLimit, WithBackoff, WithLogger und
 // WithUserAgent. Ohne Optionen gelten sinnvolle Defaults (my.fileee.com als Basis-URL,
 // static.fileee.com als Static-Host für Freigaben, konservatives Rate-Limit von 1 Request/s mit

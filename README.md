@@ -40,7 +40,40 @@ zur fileee GmbH.*
 go get github.com/strausmann/go-fileee/fileee@v0.1.1
 ```
 
-Voraussetzung: **Go 1.25** oder neuer (siehe `go.mod`).
+Voraussetzung: **Go 1.25** oder neuer (siehe `go.mod`). Die nächste Version bringt die unten
+beschriebenen Namensänderungen — sobald sie getaggt ist, hier und im `go get`-Befehl oben
+nachziehen; die genaue Versionsnummer steht dann in [`CHANGELOG.md`](CHANGELOG.md).
+
+### Migration von v0.1.x (Namens-Bruch vor 1.0)
+
+Drei exportierte Namen ändern sich — Signaturen und Verhalten sind unverändert, nur die Namen.
+Kein Übergangs-Alias.
+
+```diff
+-client, err := fileee.New(fileee.Credentials{...})
++client, err := fileee.NewClient(fileee.Credentials{...})
+
+-var boxes []fileee.FileeeBox
++var boxes []fileee.Box
+
+-if doc.Status == fileee.StatusDone { ... }
++if doc.Status == fileee.DocumentStatusDone { ... }
+```
+
+- **`New` → `NewClient`**: Das Paket hat zwei Client-artige Typen (`Client`, `ShareClient`); ein
+  nacktes `New` neben `NewShareClient` verrät nicht, welchen Typ es erzeugt. Alle anderen
+  Konstruktoren (`NewShareClient`, `NewCursor`, `NewFileSessionStore`, `NewExponentialBackoff`)
+  waren bereits nach diesem Muster benannt.
+- **`FileeeBox` → `Box`**: Stottert (`fileee.FileeeBox` wiederholt den Paketnamen) und war
+  inkonsistent zu den Geschwistern `BoxDocument`/`BoxService` im selben Paket.
+- **`Status*`-Konstanten → `DocumentStatus*`**: Die elf Konstanten von `PublicDocumentStatus`
+  (`StatusUploading` … `StatusNew`) heißen jetzt `DocumentStatusUploading` …
+  `DocumentStatusNew`. Grund: Ein bloßes `Status`-Präfix kollidiert im Lesefluss mit den
+  bereits existierenden, voll präfigierten `ContactStatus*`-Konstanten — alle anderen
+  Enum-Familien im Paket (`ConversationRole*`, `ProcessStatus*`, `ContactType*`,
+  `ContactStatus*`, `PDFMode*`, `ImageSize*`, `LinkKind*`) präfigieren vollständig mit ihrem
+  Typnamen, nur diese eine brach das Muster. Der Typname `PublicDocumentStatus` selbst ändert
+  sich nicht.
 
 ## Quickstart
 
@@ -60,7 +93,7 @@ import (
 
 func main() {
 	// Credentials aus einer Secret-Quelle laden, nie hartkodieren.
-	client, err := fileee.New(fileee.Credentials{
+	client, err := fileee.NewClient(fileee.Credentials{
 		Username: os.Getenv("FILEEE_USERNAME"),
 		Password: os.Getenv("FILEEE_PASSWORD"),
 		TOTPSeed: os.Getenv("FILEEE_TOTP_SEED"), // Base32-Seed, leer wenn kein Zwei-Faktor aktiv ist
@@ -106,7 +139,7 @@ fmt.Println("angelegt:", r.ID)
 Alle mutierenden Aufrufe (Create/Update/Upload/Delete/Share/…) laufen über denselben `Client` und
 brauchen keine zusätzliche Konfiguration — CSRF-Header und Session-Handling übernimmt die Lib.
 
-Weitere Konfiguration über die `With…`-Optionen von `New` (siehe [Client-Optionen](#client-optionen)
+Weitere Konfiguration über die `With…`-Optionen von `NewClient` (siehe [Client-Optionen](#client-optionen)
 unten). Vollständige Referenz aller Typen und Methoden:
 [pkg.go.dev](https://pkg.go.dev/github.com/strausmann/go-fileee/fileee) bzw. `go doc ./fileee`.
 
@@ -152,7 +185,7 @@ aber sie sind nicht idempotent wiederholbar wie ein einfaches `GET`.
 
 | Methode | Beschreibung | Mutation? |
 |---|---|---|
-| `fileee.New(creds, opts...)` | Konstruktor, kein sofortiger Login | – |
+| `fileee.NewClient(creds, opts...)` | Konstruktor, kein sofortiger Login | – |
 | `Client.Login(ctx)` | Voller Passwort/TOTP-Login | Ja (Session) |
 | `Client.Logout(ctx)` | Serverseitiger Widerruf + lokaler Jar-Clear | Ja (Session) |
 | `Client.EnsureSession(ctx)` | Session sicherstellen, bei Bedarf automatisch reauthentifizieren | ggf. (Re-Auth) |
@@ -213,7 +246,7 @@ aber sie sind nicht idempotent wiederholbar wie ein einfaches `GET`.
 
 | Methode | Beschreibung | Mutation? |
 |---|---|---|
-| `List(ctx)` | Alle FileeeBoxen (intern ein Diff mit vollem Cursor) | Nein |
+| `List(ctx)` | Alle Boxen (intern ein Diff mit vollem Cursor) | Nein |
 | `Get(ctx, id)` | Einzelne Box | Nein |
 | `AddDocument(ctx, boxID, documentID)` | Dokument einer Box zuordnen | Ja (POST) |
 | `RemoveDocument(ctx, boxID, documentID)` | Zuordnung aufheben (keine Dokument-Löschung) | Ja (DELETE) |
@@ -240,7 +273,7 @@ aber sie sind nicht idempotent wiederholbar wie ein einfaches `GET`.
 ### `ShareClient` (anonym, ohne Login)
 
 Eigener Konstruktor `fileee.NewShareClient(opts...)` — für Empfänger eines Freigabe-Links, z. B.
-N8N-Webhook-Flows. Nutzt dieselben `With…`-Optionen wie `New`, aber keine `Credentials`.
+N8N-Webhook-Flows. Nutzt dieselben `With…`-Optionen wie `NewClient`, aber keine `Credentials`.
 
 | Methode | Beschreibung | Mutation? |
 |---|---|---|
@@ -372,7 +405,7 @@ go-fileee/
 │   ├── contacts.go          # Kontakte (CRUD + Delete)
 │   ├── reminders.go          # Erinnerungen (CRUD + Delete)
 │   ├── conversations.go       # Konversationen (Chat, Teilen, Einladungen)
-│   ├── boxes.go                # FileeeBoxen
+│   ├── boxes.go                # Boxen
 │   ├── tags.go / companies.go / documenttypes.go / documenttypeschemes.go  # Stammdaten (read-only)
 │   ├── shareclient.go          # Anonymer Freigabe-Client
 │   └── client.go                # HTTP-Client, Cookie-Jar, CSRF-Handling

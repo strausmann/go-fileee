@@ -33,14 +33,14 @@ func TestOperatorEnumIstVollstaendig(t *testing.T) {
 
 func TestPublicDocumentStatusEnum(t *testing.T) {
 	want := []PublicDocumentStatus{
-		StatusUploading, StatusIP, StatusOCR, StatusAnalysing, StatusClassified, StatusDone,
-		StatusDeleted, StatusDeletedPermanently, StatusError, StatusLocal, StatusNew,
+		DocumentStatusUploading, DocumentStatusIP, DocumentStatusOCR, DocumentStatusAnalysing, DocumentStatusClassified, DocumentStatusDone,
+		DocumentStatusDeleted, DocumentStatusDeletedPermanently, DocumentStatusError, DocumentStatusLocal, DocumentStatusNew,
 	}
 	if len(want) != 11 {
 		t.Fatalf("PublicDocumentStatus: erwartet 11 Werte, Testliste hat %d", len(want))
 	}
-	if StatusNew != "NEW" || StatusDone != "DONE" {
-		t.Fatalf("Enum-Werte weichen vom Core-SDK-Bytecode ab: NEW=%q DONE=%q", StatusNew, StatusDone)
+	if DocumentStatusNew != "NEW" || DocumentStatusDone != "DONE" {
+		t.Fatalf("Enum-Werte weichen vom Core-SDK-Bytecode ab: NEW=%q DONE=%q", DocumentStatusNew, DocumentStatusDone)
 	}
 }
 
@@ -259,7 +259,7 @@ func TestDocumentUnmarshalMapptAttributesDataKorrekt(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if doc.ID != "doc-1" || doc.Version != 3 || doc.Status != StatusDone {
+	if doc.ID != "doc-1" || doc.Version != 3 || doc.Status != DocumentStatusDone {
 		t.Fatalf("Basisfelder falsch: %+v", doc)
 	}
 	if doc.Attributes.Title != "Testdoc" {

@@ -73,13 +73,13 @@ func TestDocuments_ExportZIPErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("ExportZIP network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.ExportZIP(context.Background(), []string{"d1"}, "geheim")
 		if err == nil {
@@ -99,13 +99,13 @@ func TestDocuments_ExportZIPErrorNetwork(t *testing.T) {
 	})
 
 	t.Run("ExportAll network error", func(t *testing.T) {
-		client, err := New(
+		client, err := NewClient(
 			Credentials{Username: "test@example.invalid", Password: "test-pw"},
 			WithBaseURL("http://127.0.0.1:1"),
 			WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "session.json"))),
 		)
 		if err != nil {
-			t.Fatalf("New: %v", err)
+			t.Fatalf("NewClient: %v", err)
 		}
 		_, err = client.Documents.ExportAll(context.Background(), "geheim")
 		if err == nil {

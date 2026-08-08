@@ -23,7 +23,7 @@ type ShareClient struct {
 }
 
 // NewShareClient erstellt einen credential-losen Client für den Zugriff auf geteilte Dokumente.
-// Es gelten dieselben With…-Optionen wie bei New (relevant v. a. WithBaseURL, WithRateLimit,
+// Es gelten dieselben With…-Optionen wie bei NewClient (relevant v. a. WithBaseURL, WithRateLimit,
 // WithUserAgent, WithHTTPClient); Auth-bezogene Optionen sind wirkungslos.
 func NewShareClient(opts ...Option) *ShareClient {
 	cfg := &clientConfig{
@@ -41,7 +41,7 @@ func NewShareClient(opts ...Option) *ShareClient {
 		cfg.staticBaseURL = defaultStaticBaseURL
 	}
 	jar, _ := cookiejar.New(nil)
-	// Siehe defaultTransport()-Kommentar (client.go) und New(): derselbe I5-Fix gilt hier — ohne
+	// Siehe defaultTransport()-Kommentar (client.go) und NewClient(): derselbe I5-Fix gilt hier — ohne
 	// eigenen WithHTTPClient hätte der ShareClient sonst ebenfalls keinerlei Absicherung gegen
 	// einen hängenden Endpunkt.
 	base := http.RoundTripper(http.DefaultTransport)

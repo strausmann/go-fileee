@@ -34,13 +34,13 @@ func captureUAServer(t *testing.T) (*httptest.Server, func() string) {
 // damit die Fileee-Server-Logs Client-Name + Version sehen (nicht das generische Go-http-client).
 func TestUserAgent_DefaultIsSet(t *testing.T) {
 	srv, lastUA := captureUAServer(t)
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "pw"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "pw"},
 		WithBaseURL(srv.URL),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))),
 		WithRateLimit(1000, 1000),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	if err := c.EnsureSession(context.Background()); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
@@ -64,14 +64,14 @@ func TestUserAgent_DefaultIsSet(t *testing.T) {
 // die Lib hängt ihre Kennung an, damit Fileee beide sieht.
 func TestUserAgent_Custom(t *testing.T) {
 	srv, lastUA := captureUAServer(t)
-	c, err := New(Credentials{Username: "u@example.invalid", Password: "pw"},
+	c, err := NewClient(Credentials{Username: "u@example.invalid", Password: "pw"},
 		WithBaseURL(srv.URL),
 		WithSessionStore(NewFileSessionStore(filepath.Join(t.TempDir(), "s.json"))),
 		WithRateLimit(1000, 1000),
 		WithUserAgent("paperless-scan-bridge/2.0"),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("NewClient: %v", err)
 	}
 	if err := c.EnsureSession(context.Background()); err != nil {
 		t.Fatalf("EnsureSession: %v", err)

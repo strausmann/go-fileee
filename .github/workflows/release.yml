@@ -14,7 +14,7 @@ jobs:
         with:
           fetch-depth: 0
           # SSH-Deploy-Key: semantic-release pusht CHANGELOG+Tag ueber SSH (repositoryUrl in
-          # .releaserc.json ist SSH). Der Deploy-Key ist Bypass-Actor im main-Ruleset -> Push
+          # .releaserc.js ist SSH). Der Deploy-Key ist Bypass-Actor im main-Ruleset -> Push
           # kommt an protected main vorbei, ohne dass GITHUB_TOKEN/Bot bypassen muss.
           ssh-key: "${{ secrets.SSH_DEPLOY_KEY }}"
       - uses: actions/setup-node@v7
