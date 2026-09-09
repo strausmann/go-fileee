@@ -1,3 +1,9 @@
+## [0.2.1](https://github.com/strausmann/go-fileee/compare/v0.2.0...v0.2.1) (2026-09-09)
+
+### Bug Fixes
+
+* **deps:** update module golang.org/x/time to v0.16.0 ([#40](https://github.com/strausmann/go-fileee/issues/40)) ([66657b6](https://github.com/strausmann/go-fileee/commit/66657b6e2e35f7b5d63fedd681ff90f0c0b7f18e))
+
 ## [0.2.0](https://github.com/strausmann/go-fileee/compare/v0.1.1...v0.2.0) (2026-08-08)
 
 ### ⚠ BREAKING CHANGES
