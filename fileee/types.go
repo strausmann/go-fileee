@@ -138,6 +138,7 @@ type Document struct {
 	SharedSpaceIDs   []string             `json:"sharedSpaceIds"`
 	ShareInformation ShareInformation     `json:"shareInformation"`
 	ForbiddenActions []DocumentAction     `json:"forbiddenActions"`
+	original         *documentSnapshot
 }
 
 // ShareInformation bündelt die aktiven anonymen Freigaben eines Dokuments. ShareIDs sind die IDs der
@@ -162,19 +163,11 @@ func (d *Document) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("fileee: document decode: %w", err)
 	}
 	d.Attributes = aux.Attributes.Data
-	return nil
+	return rememberDocument(data, d)
 }
 
 func (d Document) MarshalJSON() ([]byte, error) {
-	type shadow Document
-	aux := struct {
-		Attributes documentAttributesEnvelope `json:"attributes"`
-		shadow
-	}{
-		Attributes: documentAttributesEnvelope{Data: d.Attributes},
-		shadow:     shadow(d),
-	}
-	return json.Marshal(aux)
+	return marshalPreservedDocument(d)
 }
 
 // Page ist eine einzelne Dokumentseite (API.md §4.1) — imageVersion/contentVersion steuern den
@@ -416,6 +409,7 @@ type DocumentAttributes struct {
 	Reviewed         *bool
 	Secured          *bool
 	RawExtra         map[string]json.RawMessage
+	original         *attributeSnapshot
 }
 
 func (d *DocumentAttributes) UnmarshalJSON(data []byte) error {
@@ -486,7 +480,7 @@ func (d *DocumentAttributes) UnmarshalJSON(data []byte) error {
 			d.RawExtra[key] = val
 		}
 	}
-	return nil
+	return rememberAttributes(raw, d)
 }
 
 func setSimpleString(out map[string]json.RawMessage, key, value string) {
@@ -581,7 +575,7 @@ func (d DocumentAttributes) MarshalJSON() ([]byte, error) {
 	// Gruppen-Attribute (amount/grossIncome/netIncome/bankAccount1) werden verbatim aus RawExtra
 	// emittiert (siehe UnmarshalJSON) — kein verlustbehaftetes Rekonstruieren aus den typisierten
 	// Feldern.
-	return json.Marshal(out)
+	return marshalPreservedAttributes(d, out)
 }
 
 // Money ist ein Geldbetrag mit ISO-Währungscode.
@@ -694,6 +688,10 @@ type Company struct {
 	FromUserDB      bool              `json:"fromUserDb"`
 	Attributes      CompanyAttributes `json:"-"`
 	HasLogo         bool              `json:"hasLogo"`
+	// MainContactID ist die Kennung des Hauptkontakts dieser Firma.
+	MainContactID string `json:"mainContactId,omitempty"`
+	// UserPreferredContactID ist die Kennung des für das Konto bevorzugten Kontakts.
+	UserPreferredContactID string `json:"userPreferredContactId,omitempty"`
 }
 
 func (c *Company) UnmarshalJSON(data []byte) error {
