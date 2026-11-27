@@ -11,6 +11,10 @@
 // Einladungen) ab. Für anonyme Empfänger eines Freigabe-Links gibt es den credential-losen
 // [ShareClient].
 //
+// Bei Firmen liefern [Company.MainContactID] und [Company.UserPreferredContactID]
+// die Kennungen bereits vorhandener Kontakte. Mit [SortField.FieldType] kann
+// eine Abfrage typisierte Sortierfelder wie "Enum" senden.
+//
 // # Fertiger Server statt Library
 //
 // Wer keinen eigenen Go-Code schreiben möchte, kann fileee-server verwenden — einen deploybaren

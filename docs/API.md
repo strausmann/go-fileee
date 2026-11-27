@@ -700,6 +700,8 @@ Absender-/Empfänger-Firmen (Amazon, Vodafone, Hetzner …).
 | `documentCounter` | int | |
 | `connected` / `fromUserDb` | bool | System- vs. eigene Firma |
 | `attributes.data` | obj | reiche Firmendaten: `ibans`, `vatIds`, `emails`, `phoneNumbers`, `websites`, `germanTaxIds`, `deutschePostCodes`, `iataAirlineCodes`, `uicTicketVendorCodes` … (in `diff`-`rows[]` zusätzlich `bonusPoints`, `connectedCustomer`, `enterpriseCustomer`, `mainConversationId`, `connectedConversation`, `connectedSponsoredCompany`) |
+| `mainContactId` | str (optional) | ID des Hauptkontakts dieser Firma |
+| `userPreferredContactId` | str (optional) | ID des für das Konto bevorzugten Kontakts dieser Firma |
 | `brandingColors` / `hasLogo` | obj/bool | Logo via `GET /api/v1/companies/:id/logo/HD?version`. `brandingColors`-Felder: `primaryColorCode`, `primaryTextColorCode`, `secondaryColorCode`, `secondaryTextColorCode`, `interactionColorCode`, `warningColorCode`, `logoBackgroundColorCode`, `logoTextColorCode` |
 | `mainContactId` / `userPreferredContactId` | str | Haupt-/bevorzugter Kontakt |
 | `connectedToOtherUser` / `connectedToType` | bool/str | Verknüpfungsstatus |

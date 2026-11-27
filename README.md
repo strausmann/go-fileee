@@ -224,6 +224,10 @@ aber sie sind nicht idempotent wiederholbar wie ein einfaches `GET`.
 | `DocumentTypes` | `Query` / `Diff` / `Get` | Dokumenttypen (`Diff` fällt bei 404/405 automatisch auf `Query` zurück) | Nein |
 | `DocumentTypeSchemes` | `Query` / `Diff` / `Get`, `Fields()` auf dem Typ | Feldschema je Dokumenttyp | Nein |
 
+`Company.MainContactID` und `Company.UserPreferredContactID` verweisen auf
+Kontakte, die mit `Contacts.Get` geladen werden können. `SortField.FieldType`
+setzt bei Bedarf den vom API erwarteten Typ des Sortierfelds, etwa `Enum`.
+
 ### `Client.Contacts` (`WriteService[Contact]`)
 
 | Methode | Beschreibung | Mutation? |

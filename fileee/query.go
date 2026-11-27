@@ -47,6 +47,9 @@ type SortField struct {
 	Field      string
 	Desc       bool
 	NullsFirst bool
+	// FieldType überschreibt den Typ des Sortierfeldes, etwa mit "Enum".
+	// Ein leerer Wert behält den bisherigen Standard "String" bei.
+	FieldType string
 }
 
 // QueryResult ist das Ergebnis einer Query: die Zeilen und die Gesamtzahl.
@@ -144,8 +147,12 @@ func (o QueryOptions) toWire() queryRequestWire {
 		})
 	}
 	for _, s := range o.SortOrder {
+		fieldType := s.FieldType
+		if fieldType == "" {
+			fieldType = "String"
+		}
 		w.SortOrder = append(w.SortOrder, sortOrderWire{
-			BaseAttribute: criterionFieldWire{Value: s.Field, SerializeInformation: serializeInfoWire{Type: "String"}},
+			BaseAttribute: criterionFieldWire{Value: s.Field, SerializeInformation: serializeInfoWire{Type: fieldType}},
 			Descending:    s.Desc,
 			NullsFirst:    s.NullsFirst,
 		})
