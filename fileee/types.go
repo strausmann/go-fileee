@@ -694,6 +694,10 @@ type Company struct {
 	FromUserDB      bool              `json:"fromUserDb"`
 	Attributes      CompanyAttributes `json:"-"`
 	HasLogo         bool              `json:"hasLogo"`
+	// MainContactID ist die Kennung des Hauptkontakts dieser Firma.
+	MainContactID string `json:"mainContactId,omitempty"`
+	// UserPreferredContactID ist die Kennung des für das Konto bevorzugten Kontakts.
+	UserPreferredContactID string `json:"userPreferredContactId,omitempty"`
 }
 
 func (c *Company) UnmarshalJSON(data []byte) error {
