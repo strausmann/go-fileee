@@ -40,6 +40,8 @@ type Criterion struct {
 	Optional  bool
 	FieldType string
 	ValueType string
+	// CollectionValueType setzt den Elementtyp eines List-Kriteriums, etwa "String".
+	CollectionValueType string
 }
 
 // SortField steuert die Sortierung (API.md §3.2).
@@ -59,7 +61,8 @@ type QueryResult[T any] struct {
 }
 
 type serializeInfoWire struct {
-	Type string `json:"type"`
+	Type                           string             `json:"type"`
+	CollectionSerializeInformation *serializeInfoWire `json:"collectionSerializeInformation,omitempty"`
 }
 
 type criterionFieldWire struct {
@@ -139,11 +142,15 @@ func (o QueryOptions) toWire() queryRequestWire {
 		if c.ValueType != "" {
 			valueType = c.ValueType
 		}
+		valueInfo := serializeInfoWire{Type: valueType}
+		if c.CollectionValueType != "" {
+			valueInfo.CollectionSerializeInformation = &serializeInfoWire{Type: c.CollectionValueType}
+		}
 		w.Criteria = append(w.Criteria, criterionWire{
 			Field:    criterionFieldWire{Value: c.Field, SerializeInformation: serializeInfoWire{Type: fieldType}},
 			Operator: c.Operator,
 			Optional: c.Optional,
-			Value:    criterionValueWire{Value: c.Value, SerializeInformation: serializeInfoWire{Type: valueType}},
+			Value:    criterionValueWire{Value: c.Value, SerializeInformation: valueInfo},
 		})
 	}
 	for _, s := range o.SortOrder {

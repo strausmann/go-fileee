@@ -75,6 +75,7 @@ jobs:
             fileee/companies.go:80 \
             fileee/documenttypes.go:50 \
             fileee/query.go:85 \
+            fileee/document_preservation.go:80 \
             fileee/transport.go:80 \
             fileee/ratelimit.go:80 \
             fileee/errors.go:75

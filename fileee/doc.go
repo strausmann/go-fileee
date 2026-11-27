@@ -14,6 +14,11 @@
 // Bei Firmen liefern [Company.MainContactID] und [Company.UserPreferredContactID]
 // die Kennungen bereits vorhandener Kontakte. Mit [SortField.FieldType] kann
 // eine Abfrage typisierte Sortierfelder wie "Enum" senden.
+// [Criterion.CollectionValueType] gibt den Elementtyp eines Listenkriteriums an.
+//
+// Beim Aktualisieren geladener Dokumente bleiben unbekannte JSON-Felder erhalten.
+// [DocumentAttributes.AttributeFields] liest die Attribut-Wrapper, und
+// [DocumentAttributes.PatchAttributeFields] ersetzt einzelne Wrapper.
 //
 // # Fertiger Server statt Library
 //

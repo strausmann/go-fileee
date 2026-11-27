@@ -197,6 +197,8 @@ aber sie sind nicht idempotent wiederholbar wie ein einfaches `GET`.
 
 ### `Client.Documents` (`*DocumentService`)
 
+Geladene Dokumente behalten unbekannte JSON-Felder und Attribut-Wrapper beim Speichern. `DocumentAttributes.AttributeFields` liest die Wrapper. `PatchAttributeFields` ersetzt einzelne Wrapper oder löscht einen Wert mit JSON-`null`. Die Felder können personenbezogene Daten enthalten.
+
 | Methode | Beschreibung | Mutation? |
 |---|---|---|
 | `Query(ctx, opts)` | Paginierte Liste | Nein |
@@ -226,7 +228,7 @@ aber sie sind nicht idempotent wiederholbar wie ein einfaches `GET`.
 
 `Company.MainContactID` und `Company.UserPreferredContactID` verweisen auf
 Kontakte, die mit `Contacts.Get` geladen werden können. `SortField.FieldType`
-setzt bei Bedarf den vom API erwarteten Typ des Sortierfelds, etwa `Enum`.
+setzt bei Bedarf den vom API erwarteten Typ des Sortierfelds, etwa `Enum`. `Criterion.CollectionValueType` setzt den Elementtyp eines Listenkriteriums.
 
 ### `Client.Contacts` (`WriteService[Contact]`)
 
